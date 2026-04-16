@@ -1,0 +1,22 @@
+import "./globals.css";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "PNPKI Form Registration",
+  description:
+    "Fill out the PNPKI subscriber form in your browser. 100% client-side — no data leaves your device.",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+        {children}
+      </body>
+    </html>
+  );
+}
