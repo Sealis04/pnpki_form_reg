@@ -1,272 +1,339 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  PDFDocument,
-  PDFTextField,
-  PDFCheckBox,
-  PDFRadioGroup,
-  PDFDropdown,
-  PDFOptionList,
-  PDFSignature,
-  type PDFField,
-} from "pdf-lib";
+import { useCallback, useEffect, useState } from "react";
+import { PDFDocument, type PDFField } from "pdf-lib";
 import SignaturePad from "./SignaturePad";
 import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
 
-type FieldType =
-  | "text"
-  | "checkbox"
-  | "radio"
-  | "dropdown"
-  | "optionList"
-  | "signature"
-  | "unknown";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
 
-type FieldMeta = {
-  name: string;
-  type: FieldType;
-  options?: string[];
+// Mask raw digits into MM/DD/YYYY as the user types.
+function formatDateMask(v: string): string {
+  const d = v.replace(/\D/g, "").slice(0, 8);
+  if (d.length <= 2) return d;
+  if (d.length <= 4) return `${d.slice(0, 2)}/${d.slice(2)}`;
+  return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+}
+
+const stripToDigits = (v: string) => v.replace(/\D/g, "");
+const stripToDigitsAndDashes = (v: string) => v.replace(/[^\d-]/g, "");
+const stripToPhone = (v: string) => v.replace(/[^\d+\- ]/g, "");
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(r.error);
+    r.onload = () => resolve(String(r.result));
+    r.readAsDataURL(file);
+  });
+
+type TextKey =
+  | "lastName"
+  | "firstName"
+  | "middleName"
+  | "nameExtension"
+  | "nationality"
+  | "dateOfBirth"
+  | "tin"
+  | "organization"
+  | "organizationalUnit"
+  | "unitHouseNo"
+  | "street"
+  | "barangay"
+  | "municipalityCity"
+  | "province"
+  | "zipCode"
+  | "mobileNo"
+  | "officialWorkEmail"
+  | "date"
+  | "place"
+  | "nameOfApplicant";
+
+type CheckKey =
+  | "sexMale"
+  | "sexFemale"
+  | "primaryPhilId"
+  | "primaryPassport"
+  | "primarySss"
+  | "primaryLto"
+  | "primaryPrc"
+  | "primaryPostal"
+  | "secondaryBirth"
+  | "secondaryNbi"
+  | "secondaryPolice"
+  | "secondarySeaman"
+  | "secondaryComelec"
+  | "secondaryOsca"
+  | "secondaryOwwa"
+  | "secondaryDswd"
+  | "secondaryIbp"
+  | "secondaryNcwdp"
+  | "secondaryNcwdpGov"
+  | "secondaryHdmf"
+  | "secondaryCompany"
+  | "alienPassport"
+  | "alienCertification"
+  | "alienCompany";
+
+type TextValues = Record<TextKey, string>;
+type CheckValues = Record<CheckKey, boolean>;
+
+// Mapping of semantic field keys → AcroForm field names in pnpki_form.pdf.
+// Some semantic keys map to multiple PDF fields (page 1 + page 2 duplicates).
+const TEXT_MAP: Record<TextKey, readonly string[]> = {
+  lastName: ["Text2"],
+  firstName: ["Text3"],
+  middleName: ["Text4"],
+  nameExtension: ["Text5"],
+  nationality: ["Text6"],
+  dateOfBirth: ["Text7"],
+  tin: ["Text8"],
+  organization: ["Text9"],
+  organizationalUnit: ["Text10"],
+  unitHouseNo: ["Text11"],
+  street: ["Text15"],
+  barangay: ["Text12"],
+  municipalityCity: ["Text16"],
+  province: ["Text13"],
+  zipCode: ["Text17"],
+  mobileNo: ["Text14"],
+  officialWorkEmail: ["Text18"],
+  date: ["Text19", "Text1"],
+  place: ["Text20", "Text22"],
+  nameOfApplicant: ["Text21", "Text23"],
 };
 
-type FieldValues = Record<string, string | boolean | string[]>;
-type SignatureImages = Record<string, string>;
+const CHECK_MAP: Record<CheckKey, string> = {
+  sexMale: "Check Box22",
+  sexFemale: "Check Box23",
+  primaryPhilId: "Check Box26",
+  primaryPassport: "Check Box27",
+  primarySss: "Check Box28",
+  primaryLto: "Check Box45",
+  primaryPrc: "Check Box46",
+  primaryPostal: "Check Box47",
+  secondaryBirth: "Check Box29",
+  secondaryNbi: "Check Box30",
+  secondaryPolice: "Check Box31",
+  secondarySeaman: "Check Box32",
+  secondaryComelec: "Check Box33",
+  secondaryOsca: "Check Box34",
+  secondaryOwwa: "Check Box35",
+  secondaryDswd: "Check Box36",
+  secondaryIbp: "Check Box37",
+  secondaryNcwdp: "Check Box38",
+  secondaryNcwdpGov: "Check Box39",
+  secondaryHdmf: "Check Box40",
+  secondaryCompany: "Check Box41",
+  alienPassport: "Check Box42",
+  alienCertification: "Check Box43",
+  alienCompany: "Check Box44",
+};
 
-const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-const DEFAULT_FORM_URL = `${BASE_PATH}/form.pdf`;
+const SIGNATURE_FIELDS = ["Image26_af_image", "Image25_af_image"] as const;
+const PHOTO_FIELD = "Image1_af_image";
 
-const SIGNATURE_NAME_PATTERN = /signature|signatory|\bsign\b|initial/i;
+const EMPTY_TEXT: TextValues = {
+  lastName: "",
+  firstName: "",
+  middleName: "",
+  nameExtension: "",
+  nationality: "",
+  dateOfBirth: "",
+  tin: "",
+  organization: "",
+  organizationalUnit: "",
+  unitHouseNo: "",
+  street: "",
+  barangay: "",
+  municipalityCity: "",
+  province: "",
+  zipCode: "",
+  mobileNo: "",
+  officialWorkEmail: "",
+  date: "",
+  place: "",
+  nameOfApplicant: "",
+};
 
-function classifyField(field: PDFField): FieldMeta {
-  const name = field.getName();
-  if (field instanceof PDFSignature) return { name, type: "signature" };
-  if (field instanceof PDFTextField) return { name, type: "text" };
-  if (field instanceof PDFCheckBox) return { name, type: "checkbox" };
-  if (field instanceof PDFRadioGroup)
-    return { name, type: "radio", options: field.getOptions() };
-  if (field instanceof PDFDropdown)
-    return { name, type: "dropdown", options: field.getOptions() };
-  if (field instanceof PDFOptionList)
-    return { name, type: "optionList", options: field.getOptions() };
-  return { name, type: "unknown" };
-}
+const EMPTY_CHECKS: CheckValues = Object.fromEntries(
+  Object.keys(CHECK_MAP).map((k) => [k, false]),
+) as CheckValues;
+
+type PhotoUpload = { dataUrl: string } | null;
 
 export default function PdfFormFiller() {
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
-  const [fields, setFields] = useState<FieldMeta[]>([]);
-  const [values, setValues] = useState<FieldValues>({});
-  const [signatures, setSignatures] = useState<SignatureImages>({});
+  const [texts, setTexts] = useState<TextValues>(EMPTY_TEXT);
+  const [checks, setChecks] = useState<CheckValues>(EMPTY_CHECKS);
+  const [signature, setSignature] = useState<string>("");
+  const [photo, setPhoto] = useState<PhotoUpload>(null);
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-
-  const loadPdf = useCallback(async (bytes: Uint8Array) => {
-    setError("");
-    setStatus("Parsing PDF...");
-    try {
-      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-      const form = doc.getForm();
-      const metas = form.getFields().map(classifyField);
-
-      setPdfBytes(bytes);
-      setFields(metas);
-      setValues(() => {
-        const next: FieldValues = {};
-        for (const m of metas) {
-          if (m.type === "checkbox") next[m.name] = false;
-          else if (m.type === "optionList") next[m.name] = [];
-          else next[m.name] = "";
-        }
-        return next;
-      });
-      setSignatures({});
-      setStatus(
-        metas.length > 0
-          ? `Loaded ${metas.length} fillable field${metas.length === 1 ? "" : "s"}.`
-          : "Loaded PDF, but no AcroForm fillable fields were found. Upload a PDF that has fillable boxes.",
-      );
-    } catch (e) {
-      console.error(e);
-      setError(
-        `Failed to parse PDF: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      setStatus("");
-    }
-  }, []);
-
-  const handleUpload = async (file: File) => {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    await loadPdf(buf);
-  };
 
   const loadDefault = useCallback(async () => {
-    setLoading(true);
+    setError("");
     try {
       const res = await fetch(DEFAULT_FORM_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = new Uint8Array(await res.arrayBuffer());
-      await loadPdf(buf);
+      setPdfBytes(buf);
+      setStatus("Form template loaded.");
     } catch (e) {
       setError(
-        `Could not load bundled form at ${DEFAULT_FORM_URL}. Upload a PDF instead. (${
+        `Could not load ${DEFAULT_FORM_URL}: ${
           e instanceof Error ? e.message : String(e)
-        })`,
+        }`,
       );
-    } finally {
-      setLoading(false);
     }
-  }, [loadPdf]);
+  }, []);
 
-  // Try to auto-load a bundled form.pdf on mount (stays silent if missing).
   useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const res = await fetch(DEFAULT_FORM_URL);
-        if (!active || !res.ok) return;
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (active) await loadPdf(buf);
-      } catch {
-        /* silently ignore - user can still upload */
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [loadPdf]);
+    void loadDefault();
+  }, [loadDefault]);
 
-  const signatureFields = useMemo(
-    () =>
-      fields.filter(
-        (f) => f.type === "signature" || SIGNATURE_NAME_PATTERN.test(f.name),
-      ),
-    [fields],
-  );
+  const setText = (k: TextKey, v: string) =>
+    setTexts((prev) => ({ ...prev, [k]: v }));
 
-  const nonSignatureFields = useMemo(
-    () => fields.filter((f) => !signatureFields.some((sf) => sf.name === f.name)),
-    [fields, signatureFields],
-  );
+  const setCheck = (k: CheckKey, v: boolean) =>
+    setChecks((prev) => ({ ...prev, [k]: v }));
 
-  const updateValue = (name: string, v: string | boolean | string[]) =>
-    setValues((prev) => ({ ...prev, [name]: v }));
+  const setSex = (sex: "male" | "female") =>
+    setChecks((prev) => ({
+      ...prev,
+      sexMale: sex === "male",
+      sexFemale: sex === "female",
+    }));
 
   const generate = async () => {
     if (!pdfBytes) return;
+    if (!signature) {
+      setError("Please provide a signature (draw or upload an image).");
+      return;
+    }
+    if (!photo) {
+      setError("Please upload a passport-size photo.");
+      return;
+    }
     setError("");
     setStatus("Generating filled PDF...");
     try {
       const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
       const form = doc.getForm();
 
-      // 1) Set values on every non-signature field.
-      for (const meta of nonSignatureFields) {
-        try {
-          const v = values[meta.name];
-          if (meta.type === "text" && typeof v === "string") {
-            form.getTextField(meta.name).setText(v);
-          } else if (meta.type === "checkbox" && typeof v === "boolean") {
-            const cb = form.getCheckBox(meta.name);
-            if (v) cb.check();
-            else cb.uncheck();
-          } else if (meta.type === "radio" && typeof v === "string" && v) {
-            form.getRadioGroup(meta.name).select(v);
-          } else if (meta.type === "dropdown" && typeof v === "string" && v) {
-            form.getDropdown(meta.name).select(v);
-          } else if (
-            meta.type === "optionList" &&
-            Array.isArray(v) &&
-            v.length
-          ) {
-            form.getOptionList(meta.name).select(v);
+      // 1) Text fields
+      for (const [key, fieldNames] of Object.entries(TEXT_MAP) as [
+        TextKey,
+        readonly string[],
+      ][]) {
+        const value = texts[key];
+        if (!value) continue;
+        for (const name of fieldNames) {
+          try {
+            form.getTextField(name).setText(value);
+          } catch (e) {
+            console.warn(`Missing text field ${name}`, e);
           }
-        } catch (e) {
-          console.warn(`Skipping field ${meta.name}`, e);
         }
       }
 
-      // 2) Embed signature images onto signature-like fields.
-      for (const sigField of signatureFields) {
-        const dataUrl = signatures[sigField.name];
-        if (!dataUrl) continue;
+      // 2) Check boxes
+      for (const [key, name] of Object.entries(CHECK_MAP) as [
+        CheckKey,
+        string,
+      ][]) {
+        try {
+          const cb = form.getCheckBox(name);
+          if (checks[key]) cb.check();
+          else cb.uncheck();
+        } catch (e) {
+          console.warn(`Missing checkbox ${name}`, e);
+        }
+      }
 
-        const pngBytes = dataUrlToBytes(dataUrl);
-        const png = await doc.embedPng(pngBytes);
+      // 3) Capture widget rectangles for image overlays BEFORE flatten.
+      type WidgetLike = {
+        getRectangle: () => {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        };
+        P?: () => import("pdf-lib").PDFRef | undefined;
+        ref?: import("pdf-lib").PDFRef;
+      };
 
+      const overlayJobs: Array<{
+        dataUrl: string;
+        page: import("pdf-lib").PDFPage;
+        rect: { x: number; y: number; width: number; height: number };
+      }> = [];
+
+      const collectPlacements = (fieldName: string, dataUrl: string) => {
         let fieldObj: PDFField;
         try {
-          fieldObj = form.getField(sigField.name);
+          fieldObj = form.getField(fieldName);
         } catch {
-          continue;
+          return;
         }
-
-        // Grab widget rectangles BEFORE removing the field.
         const widgets =
           (fieldObj as unknown as {
-            acroField?: { getWidgets?: () => unknown[] };
+            acroField?: { getWidgets?: () => WidgetLike[] };
           }).acroField?.getWidgets?.() ?? [];
-
-        type WidgetLike = {
-          getRectangle: () => {
-            x: number;
-            y: number;
-            width: number;
-            height: number;
-          };
-          P?: () => import("pdf-lib").PDFRef | undefined;
-          ref?: import("pdf-lib").PDFRef;
-        };
-
-        const placements: Array<{
-          page: import("pdf-lib").PDFPage;
-          rect: { x: number; y: number; width: number; height: number };
-        }> = [];
-
-        for (const w of widgets as WidgetLike[]) {
+        for (const w of widgets) {
           try {
             const rect = w.getRectangle();
             const page = findPageForWidget(doc, w);
-            placements.push({ page, rect });
+            overlayJobs.push({ dataUrl, page, rect });
           } catch (e) {
-            console.warn("Could not resolve widget rectangle", e);
+            console.warn(`Widget rect lookup failed for ${fieldName}`, e);
           }
         }
+      };
 
-        // Remove the (possibly interactive) field so its empty appearance
-        // doesn't get flattened over the signature image.
-        try {
-          form.removeField(fieldObj);
-        } catch (e) {
-          console.warn(`Could not remove field ${sigField.name}`, e);
-        }
-
-        for (const { page, rect } of placements) {
-          const padding = 2;
-          const boxW = Math.max(rect.width - padding * 2, 1);
-          const boxH = Math.max(rect.height - padding * 2, 1);
-          const { width: pngW, height: pngH } = png.scale(1);
-          const scale = Math.min(boxW / pngW, boxH / pngH);
-          const drawW = pngW * scale;
-          const drawH = pngH * scale;
-          page.drawImage(png, {
-            x: rect.x + (rect.width - drawW) / 2,
-            y: rect.y + (rect.height - drawH) / 2,
-            width: drawW,
-            height: drawH,
-          });
+      if (signature) {
+        for (const fieldName of SIGNATURE_FIELDS) {
+          collectPlacements(fieldName, signature);
         }
       }
+      if (photo) {
+        collectPlacements(PHOTO_FIELD, photo.dataUrl);
+      }
 
-      // 3) Flatten so the output is a static, uneditable copy.
+      // 4) Flatten — renders all field appearances and strips widgets. This
+      //    runs BEFORE drawImage so the image sits on top of the (now empty)
+      //    placeholder box rather than being overdrawn by flatten.
       try {
         form.flatten();
       } catch (e) {
         console.warn("Flatten failed; saving with fields intact.", e);
       }
 
+      // 5) Draw overlays on top of flattened pages.
+      for (const { dataUrl, page, rect } of overlayJobs) {
+        const bytes = dataUrlToBytes(dataUrl);
+        const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+        const img = isJpeg
+          ? await doc.embedJpg(bytes)
+          : await doc.embedPng(bytes);
+        const padding = 2;
+        const boxW = Math.max(rect.width - padding * 2, 1);
+        const boxH = Math.max(rect.height - padding * 2, 1);
+        const { width: iw, height: ih } = img.scale(1);
+        const scale = Math.min(boxW / iw, boxH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
+        page.drawImage(img, {
+          x: rect.x + (rect.width - drawW) / 2,
+          y: rect.y + (rect.height - drawH) / 2,
+          width: drawW,
+          height: drawH,
+        });
+      }
+
       const out = await doc.save();
-      // NOTE: pdf-lib returns a Uint8Array; Blob accepts ArrayBufferView.
-      const blob = new Blob([out], { type: "application/pdf" });
+      const blob = new Blob([out as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -285,207 +352,653 @@ export default function PdfFormFiller() {
     }
   };
 
-  const hasFields = fields.length > 0;
+  const sexValue: "male" | "female" | "" = checks.sexMale
+    ? "male"
+    : checks.sexFemale
+      ? "female"
+      : "";
 
   return (
-    <div className="space-y-8">
-      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-2 text-lg font-semibold">1. Load the form</h2>
-        <p className="mb-4 text-sm text-slate-600">
-          The app auto-loads{" "}
-          <code className="rounded bg-slate-100 px-1">public/form.pdf</code> if
-          you ship one with the site. You can also upload any PDF with fillable
-          AcroForm boxes.
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={loadDefault}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-            disabled={loading}
-          >
-            {loading ? "Loading..." : "Load bundled form"}
-          </button>
-          <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-            Upload PDF
-            <input
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void handleUpload(f);
-              }}
-            />
-          </label>
-          {status && (
-            <span className="text-sm text-emerald-700">{status}</span>
-          )}
-          {error && <span className="text-sm text-red-700">{error}</span>}
+    <form
+      className="space-y-6"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void generate();
+      }}
+      noValidate={false}
+    >
+      {(status || error) && (
+        <div className="text-sm">
+          {status && <span className="text-emerald-700">{status}</span>}
+          {error && <span className="text-red-700">{error}</span>}
         </div>
-      </section>
-
-      {hasFields && nonSignatureFields.length > 0 && (
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-1 text-lg font-semibold">2. Fill the fields</h2>
-          <p className="mb-4 text-xs text-slate-500">
-            {nonSignatureFields.length} field
-            {nonSignatureFields.length === 1 ? "" : "s"} detected from the
-            PDF&apos;s AcroForm.
-          </p>
-          <div className="grid gap-4 md:grid-cols-2">
-            {nonSignatureFields.map((f) => (
-              <FieldInput
-                key={f.name}
-                meta={f}
-                value={values[f.name]}
-                onChange={(v) => updateValue(f.name, v)}
-              />
-            ))}
-          </div>
-        </section>
       )}
 
-      {hasFields && signatureFields.length > 0 && (
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-1 text-lg font-semibold">
-            3. Draw your signature{signatureFields.length === 1 ? "" : "s"}
-          </h2>
-          <p className="mb-4 text-xs text-slate-500">
-            Each pad below will be embedded into its matching signature box.
-          </p>
-          <div className="grid gap-6 md:grid-cols-2">
-            {signatureFields.map((f) => (
-              <div key={f.name}>
-                <label className="mb-2 block text-sm font-medium text-slate-700">
-                  {f.name}
-                </label>
-                <SignaturePad
-                  onChange={(dataUrl) =>
-                    setSignatures((s) => ({ ...s, [f.name]: dataUrl }))
-                  }
+      <Section title="Applicant Details">
+        <div className="grid gap-4 md:grid-cols-4">
+          <TextInput
+            label="Last Name"
+            value={texts.lastName}
+            onChange={(v) => setText("lastName", v)}
+            maxLength={50}
+            autoComplete="family-name"
+          />
+          <TextInput
+            label="First Name"
+            value={texts.firstName}
+            onChange={(v) => setText("firstName", v)}
+            maxLength={50}
+            autoComplete="given-name"
+          />
+          <TextInput
+            label="Middle Name"
+            value={texts.middleName}
+            onChange={(v) => setText("middleName", v)}
+            maxLength={50}
+            autoComplete="additional-name"
+          />
+          <TextInput
+            label="Name Extension (JR/SR/III)"
+            value={texts.nameExtension}
+            onChange={(v) => setText("nameExtension", v)}
+            maxLength={10}
+            required={false}
+            autoComplete="honorific-suffix"
+          />
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div>
+            <p className="mb-1 text-sm font-medium text-slate-700">Sex</p>
+            <div className="flex gap-4 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="sex"
+                  checked={sexValue === "male"}
+                  onChange={() => setSex("male")}
                 />
-              </div>
-            ))}
+                Male
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="sex"
+                  checked={sexValue === "female"}
+                  onChange={() => setSex("female")}
+                />
+                Female
+              </label>
+            </div>
           </div>
-        </section>
-      )}
+          <TextInput
+            label="Nationality"
+            value={texts.nationality}
+            onChange={(v) => setText("nationality", v)}
+            maxLength={40}
+          />
+        </div>
 
-      {hasFields && (
-        <section className="flex justify-end">
-          <button
-            type="button"
-            onClick={generate}
-            className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-500"
-          >
-            Generate &amp; download filled PDF
-          </button>
-        </section>
-      )}
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <TextInput
+            label="Date of Birth (MM/DD/YYYY)"
+            value={texts.dateOfBirth}
+            onChange={(v) => setText("dateOfBirth", v)}
+            placeholder="MM/DD/YYYY"
+            inputMode="numeric"
+            maxLength={10}
+            pattern="\d{2}/\d{2}/\d{4}"
+            title="Enter date as MM/DD/YYYY"
+            transform={formatDateMask}
+            uppercase={false}
+            autoComplete="bday"
+          />
+          <TextInput
+            label="TIN"
+            value={texts.tin}
+            onChange={(v) => setText("tin", v)}
+            inputMode="numeric"
+            maxLength={20}
+            transform={stripToDigitsAndDashes}
+            uppercase={false}
+            placeholder="e.g. 123-456-789-000"
+          />
+        </div>
+
+        <div className="mt-4 grid gap-4">
+          <TextInput
+            label="Organization/Agency/Company"
+            value={texts.organization}
+            onChange={(v) => setText("organization", v)}
+            maxLength={120}
+            autoComplete="organization"
+          />
+          <TextInput
+            label="Organizational Unit/Department/Division"
+            value={texts.organizationalUnit}
+            onChange={(v) => setText("organizationalUnit", v)}
+            maxLength={120}
+          />
+        </div>
+
+        <div className="mt-6">
+          <label className="mb-1 block text-sm font-medium text-slate-700">
+            Passport-size photograph (35x45mm)
+            <span className="ml-0.5 text-red-600">*</span>
+          </label>
+          <ImageDropZone
+            label="passport photo"
+            value={photo?.dataUrl ?? ""}
+            onChange={(dataUrl) => setPhoto(dataUrl ? { dataUrl } : null)}
+            previewClassName="h-40 w-auto"
+          />
+        </div>
+      </Section>
+
+      <Section title="Contact Details">
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextInput
+            label="Unit/Room/House No."
+            value={texts.unitHouseNo}
+            onChange={(v) => setText("unitHouseNo", v)}
+            maxLength={30}
+            autoComplete="address-line1"
+          />
+          <TextInput
+            label="Street"
+            value={texts.street}
+            onChange={(v) => setText("street", v)}
+            maxLength={80}
+            autoComplete="address-line2"
+          />
+          <TextInput
+            label="Barangay"
+            value={texts.barangay}
+            onChange={(v) => setText("barangay", v)}
+            maxLength={50}
+          />
+          <TextInput
+            label="Municipality/City"
+            value={texts.municipalityCity}
+            onChange={(v) => setText("municipalityCity", v)}
+            maxLength={50}
+            autoComplete="address-level2"
+          />
+          <TextInput
+            label="Province"
+            value={texts.province}
+            onChange={(v) => setText("province", v)}
+            maxLength={50}
+            autoComplete="address-level1"
+          />
+          <TextInput
+            label="Zip Code"
+            value={texts.zipCode}
+            onChange={(v) => setText("zipCode", v)}
+            inputMode="numeric"
+            maxLength={4}
+            pattern="\d{4}"
+            title="4-digit ZIP code"
+            transform={stripToDigits}
+            uppercase={false}
+            autoComplete="postal-code"
+          />
+          <TextInput
+            label="Mobile No."
+            value={texts.mobileNo}
+            onChange={(v) => setText("mobileNo", v)}
+            type="tel"
+            inputMode="tel"
+            maxLength={15}
+            transform={stripToPhone}
+            uppercase={false}
+            placeholder="09XXXXXXXXX"
+            autoComplete="tel"
+          />
+          <TextInput
+            label="Official Work Email Address"
+            value={texts.officialWorkEmail}
+            onChange={(v) => setText("officialWorkEmail", v)}
+            type="email"
+            inputMode="email"
+            maxLength={100}
+            uppercase={false}
+            autoComplete="email"
+            hint="*PNPKI-related emails will be sent to this email address"
+          />
+        </div>
+      </Section>
+
+      <Section title="Declaration">
+        <p className="mb-4 text-sm leading-relaxed text-slate-600">
+          I hereby agree that I have read and understood the provisions of the
+          Subscriber Agreement; that all information provided and documents
+          submitted in relation to this application is true and correct to the
+          best of my knowledge; that I am duly authorized to make this
+          application; that I consent to the subscriber agreement and will
+          abide by the same; that I accept the publication of my certificate
+          information.
+        </p>
+        <p className="mb-4 text-sm leading-relaxed text-slate-600">
+          I authorize and expressly give consent to the Philippine National PKI
+          through its authorized representative(s) to verify my personal
+          information from whatever source it deems appropriate.
+        </p>
+        <div className="grid gap-4 md:grid-cols-3">
+          <TextInput
+            label="Date"
+            value={texts.date}
+            onChange={(v) => setText("date", v)}
+            placeholder="MM/DD/YYYY"
+            inputMode="numeric"
+            maxLength={10}
+            pattern="\d{2}/\d{2}/\d{4}"
+            title="Enter date as MM/DD/YYYY"
+            transform={formatDateMask}
+            uppercase={false}
+          />
+          <TextInput
+            label="Place"
+            value={texts.place}
+            onChange={(v) => setText("place", v)}
+            maxLength={50}
+          />
+          <TextInput
+            label="Name of Applicant"
+            value={texts.nameOfApplicant}
+            onChange={(v) => setText("nameOfApplicant", v)}
+            maxLength={100}
+            autoComplete="name"
+          />
+        </div>
+        <div className="mt-6">
+          <p className="mb-2 text-sm font-medium text-slate-700">
+            Signature<span className="ml-0.5 text-red-600">*</span>
+          </p>
+          <SignatureInput value={signature} onChange={setSignature} />
+        </div>
+      </Section>
+
+      <Section title="Checklist of Documents">
+        <p className="mb-4 text-sm text-slate-600">
+          One (1) Primary OR two (2) Secondary government-issued IDs.
+        </p>
+        <Subhead>Primary IDs</Subhead>
+        <div className="grid gap-2 md:grid-cols-2">
+          <Check
+            label="Philippine National ID (Phil ID)"
+            checked={checks.primaryPhilId}
+            onChange={(v) => setCheck("primaryPhilId", v)}
+          />
+          <Check
+            label="LTO Driver's License"
+            checked={checks.primaryLto}
+            onChange={(v) => setCheck("primaryLto", v)}
+          />
+          <Check
+            label="Philippine Passport"
+            checked={checks.primaryPassport}
+            onChange={(v) => setCheck("primaryPassport", v)}
+          />
+          <Check
+            label="Professional Regulation Commission (PRC) ID"
+            checked={checks.primaryPrc}
+            onChange={(v) => setCheck("primaryPrc", v)}
+          />
+          <Check
+            label="SSS Unified Multi-Purpose ID"
+            checked={checks.primarySss}
+            onChange={(v) => setCheck("primarySss", v)}
+          />
+          <Check
+            label="Postal Identity Card"
+            checked={checks.primaryPostal}
+            onChange={(v) => setCheck("primaryPostal", v)}
+          />
+        </div>
+
+        <Subhead>Secondary IDs</Subhead>
+        <div className="grid gap-2 md:grid-cols-2">
+          <Check
+            label="Philippines-issued Birth Certificate"
+            checked={checks.secondaryBirth}
+            onChange={(v) => setCheck("secondaryBirth", v)}
+          />
+          <Check
+            label="National Bureau of Investigation (NBI) Clearance"
+            checked={checks.secondaryNbi}
+            onChange={(v) => setCheck("secondaryNbi", v)}
+          />
+          <Check
+            label="Police Clearance"
+            checked={checks.secondaryPolice}
+            onChange={(v) => setCheck("secondaryPolice", v)}
+          />
+          <Check
+            label="Seaman's Book"
+            checked={checks.secondarySeaman}
+            onChange={(v) => setCheck("secondarySeaman", v)}
+          />
+          <Check
+            label="COMELEC Voter's ID"
+            checked={checks.secondaryComelec}
+            onChange={(v) => setCheck("secondaryComelec", v)}
+          />
+          <Check
+            label="OSCA Senior Citizen Card"
+            checked={checks.secondaryOsca}
+            onChange={(v) => setCheck("secondaryOsca", v)}
+          />
+          <Check
+            label="Overseas Workers Welfare Administration (OWWA) ID"
+            checked={checks.secondaryOwwa}
+            onChange={(v) => setCheck("secondaryOwwa", v)}
+          />
+          <Check
+            label="Department of Social Welfare and Development (DSWD) Certification"
+            checked={checks.secondaryDswd}
+            onChange={(v) => setCheck("secondaryDswd", v)}
+          />
+          <Check
+            label="Integrated Bar of the Philippines ID"
+            checked={checks.secondaryIbp}
+            onChange={(v) => setCheck("secondaryIbp", v)}
+          />
+          <Check
+            label="Certification from the National Council for the Welfare of Disabled Persons (NCWDP)"
+            checked={checks.secondaryNcwdp}
+            onChange={(v) => setCheck("secondaryNcwdp", v)}
+          />
+          <Check
+            label="Certification from NCWDP Government Office and GOCCC ID (e.g. AFP ID)"
+            checked={checks.secondaryNcwdpGov}
+            onChange={(v) => setCheck("secondaryNcwdpGov", v)}
+          />
+          <Check
+            label="Home Development Mutual Fund (HDMF) ID"
+            checked={checks.secondaryHdmf}
+            onChange={(v) => setCheck("secondaryHdmf", v)}
+          />
+          <Check
+            label="Company IDs issued by private entities or institutions registered with/supervised by BSP, SEC, or IC"
+            checked={checks.secondaryCompany}
+            onChange={(v) => setCheck("secondaryCompany", v)}
+          />
+        </div>
+
+        <Subhead>Alien Applicants Only</Subhead>
+        <div className="grid gap-2 md:grid-cols-2">
+          <Check
+            label="Valid Passport"
+            checked={checks.alienPassport}
+            onChange={(v) => setCheck("alienPassport", v)}
+          />
+          <Check
+            label="Alien Certification of Registration / Immigrant Certificate of Registration"
+            checked={checks.alienCertification}
+            onChange={(v) => setCheck("alienCertification", v)}
+          />
+          <Check
+            label="Company IDs issued by private entities registered with/supervised by BSP, SEC, or IC"
+            checked={checks.alienCompany}
+            onChange={(v) => setCheck("alienCompany", v)}
+          />
+        </div>
+      </Section>
+
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={!pdfBytes}
+          className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Generate &amp; download filled PDF
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <header className="bg-[#1e3a8a] px-6 py-3 text-sm font-semibold uppercase tracking-[0.25em] text-white">
+        {title}
+      </header>
+      <div className="p-6">{children}</div>
+    </section>
+  );
+}
+
+function Subhead({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-widest text-slate-600 first:mt-0">
+      {children}
+    </h3>
+  );
+}
+
+type TextInputProps = {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  hint?: string;
+  type?: "text" | "email" | "tel";
+  inputMode?: "text" | "numeric" | "tel" | "email" | "decimal";
+  maxLength?: number;
+  pattern?: string;
+  required?: boolean;
+  autoComplete?: string;
+  uppercase?: boolean;
+  transform?: (v: string) => string;
+  title?: string;
+};
+
+function TextInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  type = "text",
+  inputMode,
+  maxLength,
+  pattern,
+  required = true,
+  autoComplete,
+  uppercase = true,
+  transform,
+  title,
+}: TextInputProps) {
+  const handle = (raw: string) => {
+    let v = raw;
+    if (transform) v = transform(v);
+    if (uppercase) v = v.toUpperCase();
+    if (maxLength != null) v = v.slice(0, maxLength);
+    onChange(v);
+  };
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium text-slate-700">
+        {label}
+        {required && <span className="ml-0.5 text-red-600">*</span>}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => handle(e.target.value)}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        pattern={pattern}
+        required={required}
+        autoComplete={autoComplete}
+        title={title}
+        className={`w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
+          uppercase ? "uppercase" : ""
+        }`}
+      />
+      {hint && <p className="mt-1 text-sm text-slate-500">{hint}</p>}
     </div>
   );
 }
 
-function FieldInput({
-  meta,
+function Check({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-2 text-sm text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 rounded border-slate-300"
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function ImageDropZone({
+  label,
+  value,
+  onChange,
+  previewClassName = "h-32 w-auto",
+}: {
+  label: string;
+  value: string;
+  onChange: (dataUrl: string) => void;
+  previewClassName?: string;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const [err, setErr] = useState("");
+
+  const accept = async (file: File | null | undefined) => {
+    setErr("");
+    if (!file) return;
+    if (!/^image\/(png|jpeg|jpg)$/i.test(file.type)) {
+      setErr("Only PNG or JPEG images are supported.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setErr("Image is larger than 5 MB.");
+      return;
+    }
+    const dataUrl = await readFileAsDataUrl(file);
+    onChange(dataUrl);
+  };
+
+  return (
+    <div>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void accept(e.dataTransfer.files?.[0]);
+        }}
+        className={`flex flex-col items-start gap-2 rounded-lg border border-dashed p-3 ${
+          dragOver ? "border-emerald-500 bg-emerald-50" : "border-slate-300"
+        }`}
+      >
+        <input
+          type="file"
+          accept="image/png,image/jpeg"
+          onChange={(e) => void accept(e.target.files?.[0])}
+          className="block text-sm"
+        />
+        <p className="text-sm text-slate-500">
+          Drag &amp; drop or choose a PNG/JPEG (max 5 MB) for the {label}.
+        </p>
+        {value && (
+          <div className="flex items-center gap-3">
+            <img
+              src={value}
+              alt={`${label} preview`}
+              className={`rounded border border-slate-200 ${previewClassName}`}
+            />
+            <button
+              type="button"
+              onClick={() => onChange("")}
+              className="text-sm font-medium text-red-600 hover:underline"
+            >
+              Remove
+            </button>
+          </div>
+        )}
+      </div>
+      {err && <p className="mt-1 text-sm text-red-600">{err}</p>}
+    </div>
+  );
+}
+
+function SignatureInput({
   value,
   onChange,
 }: {
-  meta: FieldMeta;
-  value: string | boolean | string[] | undefined;
-  onChange: (v: string | boolean | string[]) => void;
+  value: string;
+  onChange: (dataUrl: string) => void;
 }) {
-  if (meta.type === "checkbox") {
-    return (
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={!!value}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 rounded border-slate-300"
-        />
-        <span className="font-medium text-slate-700">{meta.name}</span>
-      </label>
-    );
-  }
-  if (meta.type === "radio") {
-    return (
-      <div>
-        <p className="mb-1 text-sm font-medium text-slate-700">{meta.name}</p>
-        <div className="flex flex-wrap gap-3">
-          {(meta.options ?? []).map((opt) => (
-            <label key={opt} className="flex items-center gap-1 text-sm">
-              <input
-                type="radio"
-                name={meta.name}
-                value={opt}
-                checked={value === opt}
-                onChange={() => onChange(opt)}
-              />
-              {opt}
-            </label>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  if (meta.type === "dropdown") {
-    return (
-      <div>
-        <label className="mb-1 block text-sm font-medium text-slate-700">
-          {meta.name}
-        </label>
-        <select
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-          value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">Select...</option>
-          {(meta.options ?? []).map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      </div>
-    );
-  }
-  if (meta.type === "optionList") {
-    const arr = Array.isArray(value) ? value : [];
-    return (
-      <div>
-        <label className="mb-1 block text-sm font-medium text-slate-700">
-          {meta.name}
-        </label>
-        <select
-          multiple
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-          value={arr}
-          onChange={(e) =>
-            onChange(Array.from(e.target.selectedOptions).map((o) => o.value))
-          }
-        >
-          {(meta.options ?? []).map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      </div>
-    );
-  }
-  // text / unknown
+  const [mode, setMode] = useState<"draw" | "upload">("draw");
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-slate-700">
-        {meta.name}
-      </label>
-      <input
-        type="text"
-        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-        value={typeof value === "string" ? value : ""}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm font-medium">
+        <button
+          type="button"
+          onClick={() => {
+            setMode("draw");
+            onChange("");
+          }}
+          className={`rounded-md px-3 py-1 ${
+            mode === "draw"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-600"
+          }`}
+        >
+          Draw
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode("upload");
+            onChange("");
+          }}
+          className={`rounded-md px-3 py-1 ${
+            mode === "upload"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-600"
+          }`}
+        >
+          Upload image
+        </button>
+      </div>
+      {mode === "draw" ? (
+        <SignaturePad onChange={onChange} />
+      ) : (
+        <ImageDropZone
+          label="signature"
+          value={value}
+          onChange={onChange}
+          previewClassName="h-24 w-auto"
+        />
+      )}
     </div>
   );
 }
