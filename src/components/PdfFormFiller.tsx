@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { PDFDocument, type PDFField } from "pdf-lib";
 import SignaturePad from "./SignaturePad";
 import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
+import { submitToSheet, toTitleCase } from "~/lib/sheet";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
+const SHEET_WEBHOOK_URL = process.env.NEXT_PUBLIC_SHEETS_WEBHOOK_URL ?? "";
 
 // Mask raw digits into MM/DD/YYYY as the user types.
 function formatDateMask(v: string): string {
@@ -216,6 +218,11 @@ export default function PdfFormFiller() {
       setError("Please upload a passport-size photo.");
       return;
     }
+    const confirmed = window.confirm(
+      "Submit your PNPKI registration?\n\n" +
+        "This will download your filled PDF and add your details to the registration sheet.",
+    );
+    if (!confirmed) return;
     setError("");
     setStatus("Generating filled PDF...");
     try {
@@ -343,6 +350,50 @@ export default function PdfFormFiller() {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus("Filled PDF downloaded.");
+
+      if (!SHEET_WEBHOOK_URL) {
+        setError(
+          "PDF downloaded, but the registration sheet is not configured " +
+            "(NEXT_PUBLIC_SHEETS_WEBHOOK_URL is missing).",
+        );
+        return;
+      }
+
+      setStatus("Submitting to registration sheet...");
+      const address = [
+        texts.unitHouseNo,
+        texts.street,
+        texts.barangay,
+        texts.municipalityCity,
+        texts.province,
+        texts.zipCode,
+      ]
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .join(", ");
+      try {
+        await submitToSheet(SHEET_WEBHOOK_URL, {
+          lastName: toTitleCase(texts.lastName),
+          firstName: toTitleCase(texts.firstName),
+          middleName: toTitleCase(texts.middleName),
+          suffix: texts.nameExtension.trim(),
+          email: texts.officialWorkEmail.trim().toLowerCase(),
+          mobile: texts.mobileNo.trim(),
+          address: toTitleCase(address),
+          organization: toTitleCase(texts.organization),
+          organizationUnit: toTitleCase(texts.organizationalUnit),
+          gender: checks.sexMale ? "Male" : checks.sexFemale ? "Female" : "",
+          tin: texts.tin.trim(),
+        });
+        setStatus("Filled PDF downloaded and details submitted to the sheet.");
+      } catch (e) {
+        console.error(e);
+        setError(
+          `Submission to sheet failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
     } catch (e) {
       console.error(e);
       setError(
@@ -752,7 +803,7 @@ export default function PdfFormFiller() {
           disabled={!pdfBytes}
           className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Generate &amp; download filled PDF
+          Submit registration
         </button>
       </div>
     </form>
