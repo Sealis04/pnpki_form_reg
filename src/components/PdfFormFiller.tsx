@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { PDFDocument, type PDFField } from "pdf-lib";
+import {
+  PDFDocument,
+  PDFTextField,
+  StandardFonts,
+  type PDFField,
+} from "pdf-lib";
 import SignaturePad from "./SignaturePad";
 import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
 import { submitToSheet, toTitleCase } from "~/lib/sheet";
@@ -9,6 +14,18 @@ import { submitToSheet, toTitleCase } from "~/lib/sheet";
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
 const SHEET_WEBHOOK_URL = process.env.NEXT_PUBLIC_SHEETS_WEBHOOK_URL ?? "";
+
+const DEFAULT_ORGANIZATION = "INTRAMUROS ADMINISTRATION";
+const DEFAULT_PLACE =
+  "INTRAMUROS ADMINISTRATION (5TH FLOOR PALACIO DEL GOBERNADOR)";
+const UNIFORM_FONT_SIZE = 10;
+
+function todayMMDDYYYY(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}/${dd}/${d.getFullYear()}`;
+}
 
 // Mask raw digits into MM/DD/YYYY as the user types.
 function formatDateMask(v: string): string {
@@ -18,8 +35,15 @@ function formatDateMask(v: string): string {
   return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
 }
 
+// Mask raw digits into TIN format XXX-XXX-XXX-XXX as the user types.
+function formatTinMask(v: string): string {
+  const d = v.replace(/\D/g, "").slice(0, 12);
+  const groups: string[] = [];
+  for (let i = 0; i < d.length; i += 3) groups.push(d.slice(i, i + 3));
+  return groups.join("-");
+}
+
 const stripToDigits = (v: string) => v.replace(/\D/g, "");
-const stripToDigitsAndDashes = (v: string) => v.replace(/[^\d-]/g, "");
 const stripToPhone = (v: string) => v.replace(/[^\d+\- ]/g, "");
 
 const readFileAsDataUrl = (file: File) =>
@@ -144,7 +168,7 @@ const EMPTY_TEXT: TextValues = {
   nationality: "",
   dateOfBirth: "",
   tin: "",
-  organization: "",
+  organization: DEFAULT_ORGANIZATION,
   organizationalUnit: "",
   unitHouseNo: "",
   street: "",
@@ -155,7 +179,7 @@ const EMPTY_TEXT: TextValues = {
   mobileNo: "",
   officialWorkEmail: "",
   date: "",
-  place: "",
+  place: DEFAULT_PLACE,
   nameOfApplicant: "",
 };
 
@@ -195,6 +219,33 @@ export default function PdfFormFiller() {
     void loadDefault();
   }, [loadDefault]);
 
+  // Auto-fill "Date" on Declaration with today's date (set on mount to avoid
+  // SSR hydration mismatch).
+  useEffect(() => {
+    setTexts((prev) => (prev.date ? prev : { ...prev, date: todayMMDDYYYY() }));
+  }, []);
+
+  // Keep "Name of Applicant" in sync with FIRST MIDDLE LAST EXT.
+  useEffect(() => {
+    const full = [
+      texts.firstName,
+      texts.middleName,
+      texts.lastName,
+      texts.nameExtension,
+    ]
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(" ");
+    setTexts((prev) =>
+      prev.nameOfApplicant === full ? prev : { ...prev, nameOfApplicant: full },
+    );
+  }, [
+    texts.firstName,
+    texts.middleName,
+    texts.lastName,
+    texts.nameExtension,
+  ]);
+
   const setText = (k: TextKey, v: string) =>
     setTexts((prev) => ({ ...prev, [k]: v }));
 
@@ -229,7 +280,8 @@ export default function PdfFormFiller() {
       const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
       const form = doc.getForm();
 
-      // 1) Text fields
+      // 1) Text fields — enforce a uniform font size across all text fields
+      //    so the flattened output doesn't mix auto-sized and fixed-size text.
       for (const [key, fieldNames] of Object.entries(TEXT_MAP) as [
         TextKey,
         readonly string[],
@@ -238,9 +290,20 @@ export default function PdfFormFiller() {
         if (!value) continue;
         for (const name of fieldNames) {
           try {
-            form.getTextField(name).setText(value);
+            const tf = form.getTextField(name);
+            tf.setText(value);
+            tf.setFontSize(UNIFORM_FONT_SIZE);
           } catch (e) {
             console.warn(`Missing text field ${name}`, e);
+          }
+        }
+      }
+      for (const field of form.getFields()) {
+        if (field instanceof PDFTextField) {
+          try {
+            field.setFontSize(UNIFORM_FONT_SIZE);
+          } catch (e) {
+            console.warn(`Could not set font size on ${field.getName()}`, e);
           }
         }
       }
@@ -311,6 +374,12 @@ export default function PdfFormFiller() {
       // 4) Flatten — renders all field appearances and strips widgets. This
       //    runs BEFORE drawImage so the image sits on top of the (now empty)
       //    placeholder box rather than being overdrawn by flatten.
+      try {
+        const helvetica = await doc.embedFont(StandardFonts.Helvetica);
+        form.updateFieldAppearances(helvetica);
+      } catch (e) {
+        console.warn("updateFieldAppearances failed", e);
+      }
       try {
         form.flatten();
       } catch (e) {
@@ -509,10 +578,12 @@ export default function PdfFormFiller() {
             value={texts.tin}
             onChange={(v) => setText("tin", v)}
             inputMode="numeric"
-            maxLength={20}
-            transform={stripToDigitsAndDashes}
+            maxLength={15}
+            pattern="\d{3}-\d{3}-\d{3}-\d{3}"
+            title="Enter TIN as XXX-XXX-XXX-XXX"
+            transform={formatTinMask}
             uppercase={false}
-            placeholder="e.g. 123-456-789-000"
+            placeholder="XXX-XXX-XXX-XXX"
           />
         </div>
 
@@ -523,6 +594,8 @@ export default function PdfFormFiller() {
             onChange={(v) => setText("organization", v)}
             maxLength={120}
             autoComplete="organization"
+            disabled
+            hint="Fixed to Intramuros Administration."
           />
           <TextInput
             label="Organizational Unit/Department/Division"
@@ -647,19 +720,25 @@ export default function PdfFormFiller() {
             title="Enter date as MM/DD/YYYY"
             transform={formatDateMask}
             uppercase={false}
+            disabled
+            hint="Auto-filled with today's date."
           />
           <TextInput
             label="Place"
             value={texts.place}
             onChange={(v) => setText("place", v)}
-            maxLength={50}
+            maxLength={120}
+            disabled
+            hint="Fixed to Intramuros Administration office."
           />
           <TextInput
             label="Name of Applicant"
             value={texts.nameOfApplicant}
             onChange={(v) => setText("nameOfApplicant", v)}
-            maxLength={100}
+            maxLength={150}
             autoComplete="name"
+            disabled
+            hint="Auto-filled from First, Middle, and Last Name."
           />
         </div>
         <div className="mt-6">
@@ -850,6 +929,7 @@ type TextInputProps = {
   uppercase?: boolean;
   transform?: (v: string) => string;
   title?: string;
+  disabled?: boolean;
 };
 
 function TextInput({
@@ -867,6 +947,7 @@ function TextInput({
   uppercase = true,
   transform,
   title,
+  disabled = false,
 }: TextInputProps) {
   const handle = (raw: string) => {
     let v = raw;
@@ -879,7 +960,7 @@ function TextInput({
     <div>
       <label className="mb-1 block text-sm font-medium text-slate-700">
         {label}
-        {required && <span className="ml-0.5 text-red-600">*</span>}
+        {required && !disabled && <span className="ml-0.5 text-red-600">*</span>}
       </label>
       <input
         type={type}
@@ -889,11 +970,16 @@ function TextInput({
         inputMode={inputMode}
         maxLength={maxLength}
         pattern={pattern}
-        required={required}
+        required={required && !disabled}
         autoComplete={autoComplete}
         title={title}
-        className={`w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
+        disabled={disabled}
+        className={`w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
           uppercase ? "uppercase" : ""
+        } ${
+          disabled
+            ? "cursor-not-allowed bg-slate-100 text-slate-600"
+            : "bg-white"
         }`}
       />
       {hint && <p className="mt-1 text-sm text-slate-500">{hint}</p>}
