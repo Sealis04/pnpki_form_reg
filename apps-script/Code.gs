@@ -10,10 +10,13 @@
  *      Use the NEW file's ID below — it's the long token in
  *      /spreadsheets/d/<ID>/edit.
  *
- *   2. Make sure row 1 has these headers, in this exact order:
- *        Last Name | First Name | Middle Name | Suffix | Email Address |
- *        Mobile Number | Residential Address | Organization Name |
- *        Organization Unit | Gender | TIN
+ *   2. Sheet layout expected by this script:
+ *        - Column A: running index (auto-filled)
+ *        - Columns B..L: submission fields, in this order:
+ *            Last Name | First Name | Middle Name | Suffix | Email Address |
+ *            Mobile Number | Residential Address | Organization Name |
+ *            Organization Unit | Gender | TIN
+ *        - Data rows start at row 8 (rows 1-7 are reserved for headers/notes).
  *
  *   3. From the converted sheet: Extensions → Apps Script.
  *      Replace the editor contents with everything in this file. Save.
@@ -34,12 +37,22 @@
  */
 
 const SHEET_ID = 'PASTE_CONVERTED_GOOGLE_SHEETS_ID_HERE';
+const FIRST_DATA_ROW = 8; // rows 1-7 are reserved for headers/notes
+const FIRST_DATA_COL = 2; // Column B — Column A holds the running index
 
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     const sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-    sheet.appendRow([
+
+    // Find the next empty row at/after FIRST_DATA_ROW by scanning Column B.
+    const lastRow = sheet.getLastRow();
+    const targetRow = Math.max(lastRow + 1, FIRST_DATA_ROW);
+
+    // Column A: running index (1-based, counted from FIRST_DATA_ROW).
+    const index = targetRow - FIRST_DATA_ROW + 1;
+
+    const values = [
       data.lastName || '',
       data.firstName || '',
       data.middleName || '',
@@ -51,9 +64,13 @@ function doPost(e) {
       data.organizationUnit || '',
       data.gender || '',
       data.tin || '',
-    ]);
+    ];
+
+    sheet.getRange(targetRow, 1).setValue(index);
+    sheet.getRange(targetRow, FIRST_DATA_COL, 1, values.length).setValues([values]);
+
     return ContentService
-      .createTextOutput(JSON.stringify({ ok: true }))
+      .createTextOutput(JSON.stringify({ ok: true, row: targetRow }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService

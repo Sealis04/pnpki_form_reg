@@ -16,8 +16,7 @@ const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
 const SHEET_WEBHOOK_URL = process.env.NEXT_PUBLIC_SHEETS_WEBHOOK_URL ?? "";
 
 const DEFAULT_ORGANIZATION = "INTRAMUROS ADMINISTRATION";
-const DEFAULT_PLACE =
-  "INTRAMUROS ADMINISTRATION (5TH FLOOR PALACIO DEL GOBERNADOR)";
+const DEFAULT_PLACE = "INTRAMUROS, MANILA";
 const UNIFORM_FONT_SIZE = 10;
 
 function todayMMDDYYYY(): string {
@@ -279,9 +278,47 @@ export default function PdfFormFiller() {
     try {
       const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
       const form = doc.getForm();
+      const helvetica = await doc.embedFont(StandardFonts.Helvetica);
 
-      // 1) Text fields — enforce a uniform font size across all text fields
-      //    so the flattened output doesn't mix auto-sized and fixed-size text.
+      // 1) Text fields — enforce a single uniform font size across all text
+      //    fields. If any single-line value would overflow its widget at the
+      //    preferred size, drop the global size in 0.5pt steps until it fits,
+      //    so every field still renders at the same size.
+      type WidgetRect = {
+        getRectangle: () => { width: number };
+      };
+      type FillJob = {
+        field: PDFTextField;
+        text: string;
+        widthBudget: number;
+        multiline: boolean;
+      };
+
+      // Some fields in the source PDF have no /DA (default appearance) entry.
+      // pdf-lib's setFontSize throws on those because it parses the existing
+      // /DA to swap the size token. Seed a /DA so the call succeeds, falling
+      // back to writing /DA directly if anything else trips it.
+      const setFieldFontSize = (tf: PDFTextField, size: number) => {
+        const acro = (
+          tf as unknown as {
+            acroField: {
+              getDefaultAppearance: () => string | undefined;
+              setDefaultAppearance: (s: string) => void;
+            };
+          }
+        ).acroField;
+        if (!acro.getDefaultAppearance()) {
+          acro.setDefaultAppearance(`/Helv ${size} Tf 0 g`);
+          return;
+        }
+        try {
+          tf.setFontSize(size);
+        } catch {
+          acro.setDefaultAppearance(`/Helv ${size} Tf 0 g`);
+        }
+      };
+
+      const fillJobs: FillJob[] = [];
       for (const [key, fieldNames] of Object.entries(TEXT_MAP) as [
         TextKey,
         readonly string[],
@@ -291,17 +328,54 @@ export default function PdfFormFiller() {
         for (const name of fieldNames) {
           try {
             const tf = form.getTextField(name);
-            tf.setText(value);
-            tf.setFontSize(UNIFORM_FONT_SIZE);
+            const widgets =
+              (tf as unknown as {
+                acroField?: { getWidgets?: () => WidgetRect[] };
+              }).acroField?.getWidgets?.() ?? [];
+            let minWidth = Infinity;
+            for (const w of widgets) {
+              try {
+                minWidth = Math.min(minWidth, w.getRectangle().width);
+              } catch {
+                // ignore
+              }
+            }
+            const widthBudget = Number.isFinite(minWidth)
+              ? Math.max(minWidth - 4, 1)
+              : Infinity;
+            let multiline = false;
+            try {
+              multiline = tf.isMultiline();
+            } catch {
+              // ignore
+            }
+            fillJobs.push({ field: tf, text: value, widthBudget, multiline });
           } catch (e) {
             console.warn(`Missing text field ${name}`, e);
           }
         }
       }
+
+      const MIN_FONT_SIZE = 5;
+      let chosenSize = UNIFORM_FONT_SIZE;
+      while (chosenSize > MIN_FONT_SIZE) {
+        const overflows = fillJobs.some(
+          (j) =>
+            !j.multiline &&
+            helvetica.widthOfTextAtSize(j.text, chosenSize) > j.widthBudget,
+        );
+        if (!overflows) break;
+        chosenSize -= 0.5;
+      }
+
+      for (const { field, text } of fillJobs) {
+        field.setText(text);
+        setFieldFontSize(field, chosenSize);
+      }
       for (const field of form.getFields()) {
         if (field instanceof PDFTextField) {
           try {
-            field.setFontSize(UNIFORM_FONT_SIZE);
+            setFieldFontSize(field, chosenSize);
           } catch (e) {
             console.warn(`Could not set font size on ${field.getName()}`, e);
           }
@@ -375,7 +449,6 @@ export default function PdfFormFiller() {
       //    runs BEFORE drawImage so the image sits on top of the (now empty)
       //    placeholder box rather than being overdrawn by flatten.
       try {
-        const helvetica = await doc.embedFont(StandardFonts.Helvetica);
         form.updateFieldAppearances(helvetica);
       } catch (e) {
         console.warn("updateFieldAppearances failed", e);
@@ -727,9 +800,9 @@ export default function PdfFormFiller() {
             label="Place"
             value={texts.place}
             onChange={(v) => setText("place", v)}
-            maxLength={120}
+            maxLength={50}
             disabled
-            hint="Fixed to Intramuros Administration office."
+            hint="Fixed to Intramuros, Manila."
           />
           <TextInput
             label="Name of Applicant"
@@ -930,6 +1003,8 @@ type TextInputProps = {
   transform?: (v: string) => string;
   title?: string;
   disabled?: boolean;
+  multiline?: boolean;
+  rows?: number;
 };
 
 function TextInput({
@@ -948,6 +1023,8 @@ function TextInput({
   transform,
   title,
   disabled = false,
+  multiline = false,
+  rows = 2,
 }: TextInputProps) {
   const handle = (raw: string) => {
     let v = raw;
@@ -962,26 +1039,47 @@ function TextInput({
         {label}
         {required && !disabled && <span className="ml-0.5 text-red-600">*</span>}
       </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => handle(e.target.value)}
-        placeholder={placeholder}
-        inputMode={inputMode}
-        maxLength={maxLength}
-        pattern={pattern}
-        required={required && !disabled}
-        autoComplete={autoComplete}
-        title={title}
-        disabled={disabled}
-        className={`w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
-          uppercase ? "uppercase" : ""
-        } ${
-          disabled
-            ? "cursor-not-allowed bg-slate-100 text-slate-600"
-            : "bg-white"
-        }`}
-      />
+      {multiline ? (
+        <textarea
+          value={value}
+          onChange={(e) => handle(e.target.value)}
+          placeholder={placeholder}
+          maxLength={maxLength}
+          required={required && !disabled}
+          autoComplete={autoComplete}
+          title={title}
+          disabled={disabled}
+          rows={rows}
+          className={`w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
+            uppercase ? "uppercase" : ""
+          } ${
+            disabled
+              ? "cursor-not-allowed bg-slate-100 text-slate-600"
+              : "bg-white"
+          }`}
+        />
+      ) : (
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => handle(e.target.value)}
+          placeholder={placeholder}
+          inputMode={inputMode}
+          maxLength={maxLength}
+          pattern={pattern}
+          required={required && !disabled}
+          autoComplete={autoComplete}
+          title={title}
+          disabled={disabled}
+          className={`w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none ${
+            uppercase ? "uppercase" : ""
+          } ${
+            disabled
+              ? "cursor-not-allowed bg-slate-100 text-slate-600"
+              : "bg-white"
+          }`}
+        />
+      )}
       {hint && <p className="mt-1 text-sm text-slate-500">{hint}</p>}
     </div>
   );
