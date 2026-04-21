@@ -45,7 +45,7 @@
  */
 
 const SHEET_ID = 'PASTE_CONVERTED_GOOGLE_SHEETS_ID_HERE';
-const FOLDER_ID = 'PASTE_DRIVE_FOLDER_ID_HERE';
+const FOLDER_ID = '1Ri1KykmHgzgSSazXqzW_je4sxYf8tsnW';
 const FIRST_DATA_ROW = 8; // rows 1-7 are reserved for headers/notes
 const FIRST_DATA_COL = 2; // Column B — Column A holds the running index
 
