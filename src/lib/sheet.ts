@@ -57,4 +57,16 @@ export async function submitToSheet(
   if (!res.ok) {
     throw new Error(`Sheet webhook returned HTTP ${res.status}`);
   }
+  // Apps Script always returns HTTP 200, even when doPost catches an error
+  // and returns {ok:false, error}. Inspect the body so caller sees failures.
+  const text = await res.text();
+  let body: { ok?: boolean; error?: string };
+  try {
+    body = JSON.parse(text) as { ok?: boolean; error?: string };
+  } catch {
+    throw new Error(`Sheet webhook returned non-JSON: ${text.slice(0, 200)}`);
+  }
+  if (body.ok === false) {
+    throw new Error(body.error || "Sheet webhook reported failure");
+  }
 }
