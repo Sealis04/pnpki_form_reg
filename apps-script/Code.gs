@@ -61,6 +61,16 @@ function normalizeMobile(raw) {
   return digits;
 }
 
+// Run this once from the Apps Script editor (Select function → primeAuth →
+// Run) after adding DriveApp usage, so Google prompts for the new Drive
+// scope. Deploying alone does NOT trigger the auth prompt — a function that
+// touches the new API has to run interactively at least once.
+function primeAuth() {
+  const folderName = DriveApp.getFolderById(FOLDER_ID).getName();
+  const sheetName = SpreadsheetApp.openById(SHEET_ID).getName();
+  Logger.log('Folder: ' + folderName + ' | Sheet: ' + sheetName);
+}
+
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
