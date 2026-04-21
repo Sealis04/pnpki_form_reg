@@ -9,7 +9,7 @@ import {
 } from "pdf-lib";
 import SignaturePad from "./SignaturePad";
 import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
-import { submitToSheet, toTitleCase } from "~/lib/sheet";
+import { bytesToBase64, submitToSheet, toTitleCase } from "~/lib/sheet";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
@@ -514,6 +514,7 @@ export default function PdfFormFiller() {
         .filter(Boolean)
         .join(", ");
       try {
+        const pdfBase64 = await bytesToBase64(out);
         await submitToSheet(SHEET_WEBHOOK_URL, {
           lastName: toTitleCase(texts.lastName),
           firstName: toTitleCase(texts.firstName),
@@ -526,6 +527,7 @@ export default function PdfFormFiller() {
           organizationUnit: toTitleCase(texts.organizationalUnit),
           gender: checks.sexMale ? "Male" : checks.sexFemale ? "Female" : "",
           tin: texts.tin.trim(),
+          pdfBase64,
         });
         setStatus("Filled PDF downloaded and details submitted to the sheet.");
       } catch (e) {

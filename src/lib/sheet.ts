@@ -20,7 +20,27 @@ export type SheetPayload = {
   organizationUnit: string;
   gender: string;
   tin: string;
+  // Base64-encoded PDF body (no data-URL prefix). When present, the Apps
+  // Script webhook uploads the file to Drive and writes the link into the
+  // sheet row.
+  pdfBase64?: string;
 };
+
+// Encode a Uint8Array as base64 using FileReader so we don't blow the call
+// stack on large PDFs (String.fromCharCode.apply has argument-count limits).
+export function bytesToBase64(bytes: Uint8Array): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = String(reader.result);
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
 
 export async function submitToSheet(
   url: string,
