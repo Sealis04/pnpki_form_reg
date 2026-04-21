@@ -5,15 +5,10 @@ import type SignaturePadLib from "signature_pad";
 
 type Props = {
   onChange: (dataUrl: string) => void;
-  width?: number;
   height?: number;
 };
 
-export default function SignaturePad({
-  onChange,
-  width = 500,
-  height = 180,
-}: Props) {
+export default function SignaturePad({ onChange, height = 200 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const padRef = useRef<SignaturePadLib | null>(null);
   const [empty, setEmpty] = useState(true);
@@ -66,7 +61,7 @@ export default function SignaturePad({
       <div className="rounded-lg border border-dashed border-slate-300 bg-white">
         <canvas
           ref={canvasRef}
-          style={{ width, height, display: "block", maxWidth: "100%" }}
+          style={{ width: "100%", height, display: "block" }}
           className="touch-none"
         />
       </div>

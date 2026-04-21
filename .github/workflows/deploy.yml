@@ -38,6 +38,7 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+          NEXT_PUBLIC_SHEETS_WEBHOOK_URL: ${{ secrets.SHEETS_WEBHOOK_URL }}
 
       - name: Add .nojekyll
         run: touch ./out/.nojekyll
