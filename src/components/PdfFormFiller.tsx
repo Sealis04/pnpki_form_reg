@@ -549,8 +549,8 @@ export default function PdfFormFiller() {
           address: toTitleCase(address),
           organization: toTitleCase(texts.organization),
           organizationUnit: toTitleCase(texts.organizationalUnit),
-          gender: checks.sexMale ? "Male" : checks.sexFemale ? "Female" : "",
-          tin: texts.tin.trim(),
+          gender: checks.sexMale ? "M" : checks.sexFemale ? "F" : "",
+          tin: texts.tin.replace(/\D/g, ""),
           pdfBase64,
         });
         setStatus("Filled PDF downloaded and details submitted to the sheet.");
