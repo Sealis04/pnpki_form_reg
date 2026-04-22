@@ -57,20 +57,57 @@ export function dataUrlToBytes(dataUrl: string): Uint8Array {
   return out;
 }
 
+export type InkBounds = { x: number; y: number; width: number; height: number };
+
+/**
+ * Locate the tight bounding box of "ink" pixels in a rasterized image. A pixel
+ * counts as ink when it is sufficiently opaque AND not near-white — this
+ * covers both transparent-background PNGs (from the draw pad) and
+ * white-background JPEG/PNG uploads. Returns null when no ink is found.
+ */
+export function findInkBounds(
+  imageData: ImageData,
+  options: { alphaThreshold?: number; whiteThreshold?: number } = {},
+): InkBounds | null {
+  const alphaThreshold = options.alphaThreshold ?? 10;
+  const whiteThreshold = options.whiteThreshold ?? 245;
+  const { data: px, width: w, height: h } = imageData;
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const r = px[i]!;
+      const g = px[i + 1]!;
+      const b = px[i + 2]!;
+      const a = px[i + 3]!;
+      const isInk =
+        a > alphaThreshold &&
+        (r < whiteThreshold || g < whiteThreshold || b < whiteThreshold);
+      if (isInk) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
 /**
  * Crop the transparent / near-white margin around a signature image so the
- * actual ink fills the frame. Treats a pixel as "ink" when it is sufficiently
- * opaque AND not near-white — this covers both transparent-background PNGs
- * (from the draw pad) and white-background JPEG/PNG uploads. Returns the
- * original data URL if nothing ink-like is found.
+ * actual ink fills the frame. Returns the original data URL if nothing
+ * ink-like is found.
  */
 export async function trimSignatureDataUrl(
   dataUrl: string,
   options: { padding?: number; alphaThreshold?: number; whiteThreshold?: number } = {},
 ): Promise<string> {
   const padding = options.padding ?? 4;
-  const alphaThreshold = options.alphaThreshold ?? 10;
-  const whiteThreshold = options.whiteThreshold ?? 245;
 
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const el = new Image();
@@ -97,36 +134,13 @@ export async function trimSignatureDataUrl(
     return dataUrl;
   }
 
-  const px = data.data;
-  let minX = w;
-  let minY = h;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const r = px[i]!;
-      const g = px[i + 1]!;
-      const b = px[i + 2]!;
-      const a = px[i + 3]!;
-      const isInk =
-        a > alphaThreshold &&
-        (r < whiteThreshold || g < whiteThreshold || b < whiteThreshold);
-      if (isInk) {
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
+  const bounds = findInkBounds(data, options);
+  if (!bounds) return dataUrl;
 
-  if (maxX < 0) return dataUrl;
-
-  const x0 = Math.max(0, minX - padding);
-  const y0 = Math.max(0, minY - padding);
-  const x1 = Math.min(w, maxX + 1 + padding);
-  const y1 = Math.min(h, maxY + 1 + padding);
+  const x0 = Math.max(0, bounds.x - padding);
+  const y0 = Math.max(0, bounds.y - padding);
+  const x1 = Math.min(w, bounds.x + bounds.width + padding);
+  const y1 = Math.min(h, bounds.y + bounds.height + padding);
   const tw = x1 - x0;
   const th = y1 - y0;
 
