@@ -8,7 +8,11 @@ import {
   type PDFField,
 } from "pdf-lib";
 import SignaturePad from "./SignaturePad";
-import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
+import {
+  dataUrlToBytes,
+  findPageForWidget,
+  trimSignatureDataUrl,
+} from "~/lib/pdf";
 import { bytesToBase64, submitToSheet, toTitleCase } from "~/lib/sheet";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -17,7 +21,21 @@ const SHEET_WEBHOOK_URL = process.env.NEXT_PUBLIC_SHEETS_WEBHOOK_URL ?? "";
 
 const DEFAULT_ORGANIZATION = "INTRAMUROS ADMINISTRATION";
 const DEFAULT_PLACE = "INTRAMUROS, MANILA";
+const DEFAULT_NATIONALITY = "FILIPINO";
 const UNIFORM_FONT_SIZE = 10;
+
+const NATIONALITY_OPTIONS = [
+  "FILIPINO",
+  "AMERICAN",
+  "CHINESE",
+  "JAPANESE",
+  "KOREAN",
+  "INDIAN",
+  "BRITISH",
+  "CANADIAN",
+  "AUSTRALIAN",
+  "SINGAPOREAN",
+] as const;
 
 function todayMMDDYYYY(): string {
   const d = new Date();
@@ -164,7 +182,7 @@ const EMPTY_TEXT: TextValues = {
   firstName: "",
   middleName: "",
   nameExtension: "",
-  nationality: "",
+  nationality: DEFAULT_NATIONALITY,
   dateOfBirth: "",
   tin: "",
   organization: DEFAULT_ORGANIZATION,
@@ -437,8 +455,14 @@ export default function PdfFormFiller() {
       };
 
       if (signature) {
+        let signatureForOverlay = signature;
+        try {
+          signatureForOverlay = await trimSignatureDataUrl(signature);
+        } catch (e) {
+          console.warn("Signature trim failed; using original.", e);
+        }
         for (const fieldName of SIGNATURE_FIELDS) {
-          collectPlacements(fieldName, signature);
+          collectPlacements(fieldName, signatureForOverlay);
         }
       }
       if (photo) {
@@ -525,8 +549,8 @@ export default function PdfFormFiller() {
           address: toTitleCase(address),
           organization: toTitleCase(texts.organization),
           organizationUnit: toTitleCase(texts.organizationalUnit),
-          gender: checks.sexMale ? "Male" : checks.sexFemale ? "Female" : "",
-          tin: texts.tin.trim(),
+          gender: checks.sexMale ? "M" : checks.sexFemale ? "F" : "",
+          tin: texts.tin.replace(/\D/g, ""),
           pdfBase64,
         });
         setStatus("Filled PDF downloaded and details submitted to the sheet.");
@@ -626,12 +650,23 @@ export default function PdfFormFiller() {
               </label>
             </div>
           </div>
-          <TextInput
-            label="Nationality"
-            value={texts.nationality}
-            onChange={(v) => setText("nationality", v)}
-            maxLength={40}
-          />
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Nationality<span className="ml-0.5 text-red-600">*</span>
+            </label>
+            <select
+              value={texts.nationality}
+              onChange={(e) => setText("nationality", e.target.value)}
+              required
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm uppercase focus:border-slate-500 focus:outline-none"
+            >
+              {NATIONALITY_OPTIONS.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
