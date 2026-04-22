@@ -8,11 +8,10 @@ import {
   type PDFField,
 } from "pdf-lib";
 import SignaturePad from "./SignaturePad";
-import {
-  dataUrlToBytes,
-  findPageForWidget,
-  trimSignatureDataUrl,
-} from "~/lib/pdf";
+import SignatureAdjuster, {
+  computeAspectAutoCrop,
+} from "./SignatureAdjuster";
+import { dataUrlToBytes, findPageForWidget } from "~/lib/pdf";
 import { bytesToBase64, submitToSheet, toTitleCase } from "~/lib/sheet";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -23,6 +22,8 @@ const DEFAULT_ORGANIZATION = "INTRAMUROS ADMINISTRATION";
 const DEFAULT_PLACE = "INTRAMUROS, MANILA";
 const DEFAULT_NATIONALITY = "FILIPINO";
 const UNIFORM_FONT_SIZE = 10;
+// 35 mm wide x 45 mm tall passport-size photo.
+const PHOTO_ASPECT = 35 / 45;
 
 const NATIONALITY_OPTIONS = [
   "FILIPINO",
@@ -212,8 +213,13 @@ export default function PdfFormFiller() {
   const [checks, setChecks] = useState<CheckValues>(EMPTY_CHECKS);
   const [signature, setSignature] = useState<string>("");
   const [photo, setPhoto] = useState<PhotoUpload>(null);
+  const handlePhotoCropChange = useCallback((dataUrl: string) => {
+    setPhoto(dataUrl ? { dataUrl } : null);
+  }, []);
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const loadDefault = useCallback(async () => {
     setError("");
@@ -276,21 +282,44 @@ export default function PdfFormFiller() {
       sexFemale: sex === "female",
     }));
 
-  const generate = async () => {
-    if (!pdfBytes) return;
+  const validateBeforeGenerate = (): boolean => {
+    if (!pdfBytes) return false;
     if (!signature) {
       setError("Please provide a signature (draw or upload an image).");
-      return;
+      return false;
     }
     if (!photo) {
       setError("Please upload a passport-size photo.");
-      return;
+      return false;
     }
-    const confirmed = window.confirm(
-      "Submit your PNPKI registration?\n\n" +
-        "This will download your filled PDF and add your details to the registration sheet.",
-    );
-    if (!confirmed) return;
+    const email = texts.officialWorkEmail.trim().toLowerCase();
+    if (
+      email.endsWith("@intramuros.gov.ph") ||
+      email.endsWith(".intramuros.gov.ph")
+    ) {
+      window.alert(
+        "Please use your PERSONAL email address. intramuros.gov.ph addresses are not accepted.",
+      );
+      return false;
+    }
+    setError("");
+    return true;
+  };
+
+  const requestSubmit = () => {
+    if (!validateBeforeGenerate()) return;
+    setShowConfirm(true);
+  };
+
+  const downloadOnly = () => {
+    if (!validateBeforeGenerate()) return;
+    void generate(false);
+  };
+
+  const generate = async (submitSheet: boolean) => {
+    if (!pdfBytes || !signature || !photo) return;
+    setShowConfirm(false);
+    setSubmitting(true);
     setError("");
     setStatus("Generating filled PDF...");
     try {
@@ -455,14 +484,8 @@ export default function PdfFormFiller() {
       };
 
       if (signature) {
-        let signatureForOverlay = signature;
-        try {
-          signatureForOverlay = await trimSignatureDataUrl(signature);
-        } catch (e) {
-          console.warn("Signature trim failed; using original.", e);
-        }
         for (const fieldName of SIGNATURE_FIELDS) {
-          collectPlacements(fieldName, signatureForOverlay);
+          collectPlacements(fieldName, signature);
         }
       }
       if (photo) {
@@ -517,6 +540,8 @@ export default function PdfFormFiller() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus("Filled PDF downloaded.");
 
+      if (!submitSheet) return;
+
       if (!SHEET_WEBHOOK_URL) {
         setError(
           "PDF downloaded, but the registration sheet is not configured " +
@@ -568,6 +593,8 @@ export default function PdfFormFiller() {
         `Failed to generate: ${e instanceof Error ? e.message : String(e)}`,
       );
       setStatus("");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -582,7 +609,7 @@ export default function PdfFormFiller() {
       className="space-y-6"
       onSubmit={(e) => {
         e.preventDefault();
-        void generate();
+        requestSubmit();
       }}
       noValidate={false}
     >
@@ -720,12 +747,7 @@ export default function PdfFormFiller() {
             Passport-size photograph (35x45mm)
             <span className="ml-0.5 text-red-600">*</span>
           </label>
-          <ImageDropZone
-            label="passport photo"
-            value={photo?.dataUrl ?? ""}
-            onChange={(dataUrl) => setPhoto(dataUrl ? { dataUrl } : null)}
-            previewClassName="h-40 w-auto"
-          />
+          <PhotoInput onChange={handlePhotoCropChange} />
         </div>
       </Section>
 
@@ -855,7 +877,7 @@ export default function PdfFormFiller() {
           <p className="mb-2 text-sm font-medium text-slate-700">
             Signature<span className="ml-0.5 text-red-600">*</span>
           </p>
-          <SignatureInput value={signature} onChange={setSignature} />
+          <SignatureInput onChange={setSignature} />
         </div>
       </Section>
 
@@ -986,16 +1008,90 @@ export default function PdfFormFiller() {
         </div>
       </Section>
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={downloadOnly}
+          disabled={!pdfBytes || submitting}
+          className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Download only
+        </button>
         <button
           type="submit"
-          disabled={!pdfBytes}
+          disabled={!pdfBytes || submitting}
           className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Submit registration
+          {submitting ? "Submitting..." : "Submit registration"}
         </button>
       </div>
+
+      {showConfirm && (
+        <ConfirmDialog
+          onCancel={() => setShowConfirm(false)}
+          onConfirm={() => void generate(true)}
+        />
+      )}
     </form>
+  );
+}
+
+function ConfirmDialog({
+  onCancel,
+  onConfirm,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h2
+            id="confirm-title"
+            className="text-base font-semibold text-slate-900"
+          >
+            Submit PNPKI Registration?
+          </h2>
+        </div>
+        <div className="space-y-3 px-6 py-5 text-sm leading-relaxed text-slate-700">
+          <p>
+            This will download your filled PDF and add your details to the
+            registration sheet.
+          </p>
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-amber-900">
+            <span className="font-semibold">Note:</span> Your information will
+            be saved by the PMD-ICT team for collation and submission to the
+            DICT-PNPKI team.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500"
+          >
+            Confirm &amp; Submit
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1222,22 +1318,25 @@ function ImageDropZone({
 }
 
 function SignatureInput({
-  value,
   onChange,
 }: {
-  value: string;
   onChange: (dataUrl: string) => void;
 }) {
   const [mode, setMode] = useState<"draw" | "upload">("draw");
+  const [raw, setRaw] = useState<string>("");
+
+  const reset = (nextMode: "draw" | "upload") => {
+    setMode(nextMode);
+    setRaw("");
+    onChange("");
+  };
+
   return (
     <div>
       <div className="mb-3 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm font-medium">
         <button
           type="button"
-          onClick={() => {
-            setMode("draw");
-            onChange("");
-          }}
+          onClick={() => reset("draw")}
           className={`rounded-md px-3 py-1 ${
             mode === "draw"
               ? "bg-white text-slate-900 shadow-sm"
@@ -1248,10 +1347,7 @@ function SignatureInput({
         </button>
         <button
           type="button"
-          onClick={() => {
-            setMode("upload");
-            onChange("");
-          }}
+          onClick={() => reset("upload")}
           className={`rounded-md px-3 py-1 ${
             mode === "upload"
               ? "bg-white text-slate-900 shadow-sm"
@@ -1262,13 +1358,56 @@ function SignatureInput({
         </button>
       </div>
       {mode === "draw" ? (
-        <SignaturePad onChange={onChange} />
+        <SignaturePad
+          onChange={(d) => {
+            setRaw(d);
+            if (!d) onChange("");
+          }}
+        />
       ) : (
         <ImageDropZone
           label="signature"
-          value={value}
+          value={raw}
+          onChange={(d) => {
+            setRaw(d);
+            if (!d) onChange("");
+          }}
+          previewClassName="h-20 w-auto"
+        />
+      )}
+      {raw && <SignatureAdjuster source={raw} onChange={onChange} />}
+    </div>
+  );
+}
+
+function PhotoInput({
+  onChange,
+}: {
+  onChange: (dataUrl: string) => void;
+}) {
+  const [raw, setRaw] = useState<string>("");
+  const photoAutoFit = useCallback(
+    (img: HTMLImageElement) => computeAspectAutoCrop(img, PHOTO_ASPECT),
+    [],
+  );
+  return (
+    <div>
+      <ImageDropZone
+        label="passport photo"
+        value={raw}
+        onChange={(d) => {
+          setRaw(d);
+          if (!d) onChange("");
+        }}
+        previewClassName="h-40 w-auto"
+      />
+      {raw && (
+        <SignatureAdjuster
+          source={raw}
           onChange={onChange}
-          previewClassName="h-24 w-auto"
+          autoFit={photoAutoFit}
+          aspectRatio={PHOTO_ASPECT}
+          helperText="Drag the green corners to frame your face. The crop is locked to the 35×45 mm passport ratio."
         />
       )}
     </div>
