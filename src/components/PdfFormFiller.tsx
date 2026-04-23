@@ -837,13 +837,20 @@ export default function PdfFormFiller() {
 
       <Section title="Declaration">
         <p className="mb-4 text-sm leading-relaxed text-slate-600">
-          I hereby agree that I have read and understood the provisions of the
-          Subscriber Agreement; that all information provided and documents
-          submitted in relation to this application is true and correct to the
-          best of my knowledge; that I am duly authorized to make this
-          application; that I consent to the subscriber agreement and will
-          abide by the same; that I accept the publication of my certificate
-          information.
+          I hereby agree that I have read and understood the provisions of the{" "}
+          <a
+            href="https://drive.google.com/file/d/1oDvDLZlGBueUhZRkvJZlpQzj1xmGKgBR/view?usp=sharing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-blue-600 underline hover:text-blue-700"
+          >
+            Subscriber Agreement
+          </a>
+          ; that all information provided and documents submitted in relation
+          to this application is true and correct to the best of my knowledge;
+          that I am duly authorized to make this application; that I consent
+          to the subscriber agreement and will abide by the same; that I
+          accept the publication of my certificate information.
         </p>
         <p className="mb-4 text-sm leading-relaxed text-slate-600">
           I authorize and expressly give consent to the Philippine National PKI
