@@ -180,6 +180,37 @@ const CHECK_MAP: Record<CheckKey, string> = {
   alienCompany: "Check Box44",
 };
 
+const PRIMARY_ID_KEYS = [
+  "primaryPhilId",
+  "primaryPassport",
+  "primarySss",
+  "primaryLto",
+  "primaryPrc",
+  "primaryPostal",
+] as const satisfies readonly CheckKey[];
+
+const SECONDARY_ID_KEYS = [
+  "secondaryBirth",
+  "secondaryNbi",
+  "secondaryPolice",
+  "secondarySeaman",
+  "secondaryComelec",
+  "secondaryOsca",
+  "secondaryOwwa",
+  "secondaryDswd",
+  "secondaryIbp",
+  "secondaryNcwdp",
+  "secondaryNcwdpGov",
+  "secondaryHdmf",
+  "secondaryCompany",
+] as const satisfies readonly CheckKey[];
+
+const ALIEN_ID_KEYS = [
+  "alienPassport",
+  "alienCertification",
+  "alienCompany",
+] as const satisfies readonly CheckKey[];
+
 const SIGNATURE_FIELDS = ["Image26_af_image", "Image25_af_image"] as const;
 const PHOTO_FIELD = "Image1_af_image";
 
@@ -279,6 +310,24 @@ export default function PdfFormFiller() {
 
   const setCheck = (k: CheckKey, v: boolean) =>
     setChecks((prev) => ({ ...prev, [k]: v }));
+
+  const primaryCount = PRIMARY_ID_KEYS.filter((k) => checks[k]).length;
+  const secondaryCount = SECONDARY_ID_KEYS.filter((k) => checks[k]).length;
+  const alienCount = ALIEN_ID_KEYS.filter((k) => checks[k]).length;
+
+  const isIdDisabled = (key: CheckKey): boolean => {
+    if (checks[key]) return false;
+    if (alienCount > 0) return true;
+    if (primaryCount > 0) return true;
+    if (secondaryCount > 0) {
+      const isSecondary = (SECONDARY_ID_KEYS as readonly CheckKey[]).includes(
+        key,
+      );
+      if (!isSecondary) return true;
+      if (secondaryCount >= 2) return true;
+    }
+    return false;
+  };
 
   const setSex = (sex: "male" | "female") =>
     setChecks((prev) => ({
@@ -908,31 +957,37 @@ export default function PdfFormFiller() {
             label="Philippine National ID (Phil ID)"
             checked={checks.primaryPhilId}
             onChange={(v) => setCheck("primaryPhilId", v)}
+            disabled={isIdDisabled("primaryPhilId")}
           />
           <Check
             label="LTO Driver's License"
             checked={checks.primaryLto}
             onChange={(v) => setCheck("primaryLto", v)}
+            disabled={isIdDisabled("primaryLto")}
           />
           <Check
             label="Philippine Passport"
             checked={checks.primaryPassport}
             onChange={(v) => setCheck("primaryPassport", v)}
+            disabled={isIdDisabled("primaryPassport")}
           />
           <Check
             label="Professional Regulation Commission (PRC) ID"
             checked={checks.primaryPrc}
             onChange={(v) => setCheck("primaryPrc", v)}
+            disabled={isIdDisabled("primaryPrc")}
           />
           <Check
             label="SSS Unified Multi-Purpose ID"
             checked={checks.primarySss}
             onChange={(v) => setCheck("primarySss", v)}
+            disabled={isIdDisabled("primarySss")}
           />
           <Check
             label="Postal Identity Card"
             checked={checks.primaryPostal}
             onChange={(v) => setCheck("primaryPostal", v)}
+            disabled={isIdDisabled("primaryPostal")}
           />
         </div>
 
@@ -942,66 +997,79 @@ export default function PdfFormFiller() {
             label="Philippines-issued Birth Certificate"
             checked={checks.secondaryBirth}
             onChange={(v) => setCheck("secondaryBirth", v)}
+            disabled={isIdDisabled("secondaryBirth")}
           />
           <Check
             label="National Bureau of Investigation (NBI) Clearance"
             checked={checks.secondaryNbi}
             onChange={(v) => setCheck("secondaryNbi", v)}
+            disabled={isIdDisabled("secondaryNbi")}
           />
           <Check
             label="Police Clearance"
             checked={checks.secondaryPolice}
             onChange={(v) => setCheck("secondaryPolice", v)}
+            disabled={isIdDisabled("secondaryPolice")}
           />
           <Check
             label="Seaman's Book"
             checked={checks.secondarySeaman}
             onChange={(v) => setCheck("secondarySeaman", v)}
+            disabled={isIdDisabled("secondarySeaman")}
           />
           <Check
             label="COMELEC Voter's ID"
             checked={checks.secondaryComelec}
             onChange={(v) => setCheck("secondaryComelec", v)}
+            disabled={isIdDisabled("secondaryComelec")}
           />
           <Check
             label="OSCA Senior Citizen Card"
             checked={checks.secondaryOsca}
             onChange={(v) => setCheck("secondaryOsca", v)}
+            disabled={isIdDisabled("secondaryOsca")}
           />
           <Check
             label="Overseas Workers Welfare Administration (OWWA) ID"
             checked={checks.secondaryOwwa}
             onChange={(v) => setCheck("secondaryOwwa", v)}
+            disabled={isIdDisabled("secondaryOwwa")}
           />
           <Check
             label="Department of Social Welfare and Development (DSWD) Certification"
             checked={checks.secondaryDswd}
             onChange={(v) => setCheck("secondaryDswd", v)}
+            disabled={isIdDisabled("secondaryDswd")}
           />
           <Check
             label="Integrated Bar of the Philippines ID"
             checked={checks.secondaryIbp}
             onChange={(v) => setCheck("secondaryIbp", v)}
+            disabled={isIdDisabled("secondaryIbp")}
           />
           <Check
             label="Certification from the National Council for the Welfare of Disabled Persons (NCWDP)"
             checked={checks.secondaryNcwdp}
             onChange={(v) => setCheck("secondaryNcwdp", v)}
+            disabled={isIdDisabled("secondaryNcwdp")}
           />
           <Check
             label="Certification from NCWDP Government Office and GOCCC ID (e.g. AFP ID)"
             checked={checks.secondaryNcwdpGov}
             onChange={(v) => setCheck("secondaryNcwdpGov", v)}
+            disabled={isIdDisabled("secondaryNcwdpGov")}
           />
           <Check
             label="Home Development Mutual Fund (HDMF) ID"
             checked={checks.secondaryHdmf}
             onChange={(v) => setCheck("secondaryHdmf", v)}
+            disabled={isIdDisabled("secondaryHdmf")}
           />
           <Check
             label="Company IDs issued by private entities or institutions registered with/supervised by BSP, SEC, or IC"
             checked={checks.secondaryCompany}
             onChange={(v) => setCheck("secondaryCompany", v)}
+            disabled={isIdDisabled("secondaryCompany")}
           />
         </div>
 
@@ -1011,16 +1079,19 @@ export default function PdfFormFiller() {
             label="Valid Passport"
             checked={checks.alienPassport}
             onChange={(v) => setCheck("alienPassport", v)}
+            disabled={isIdDisabled("alienPassport")}
           />
           <Check
             label="Alien Certification of Registration / Immigrant Certificate of Registration"
             checked={checks.alienCertification}
             onChange={(v) => setCheck("alienCertification", v)}
+            disabled={isIdDisabled("alienCertification")}
           />
           <Check
             label="Company IDs issued by private entities registered with/supervised by BSP, SEC, or IC"
             checked={checks.alienCompany}
             onChange={(v) => setCheck("alienCompany", v)}
+            disabled={isIdDisabled("alienCompany")}
           />
         </div>
       </Section>
@@ -1239,18 +1310,25 @@ function Check({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-start gap-2 text-sm text-slate-700">
+    <label
+      className={`flex items-start gap-2 text-sm ${
+        disabled ? "cursor-not-allowed text-slate-400" : "text-slate-700"
+      }`}
+    >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 rounded border-slate-300"
+        className="mt-0.5 h-4 w-4 rounded border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
       />
       <span>{label}</span>
     </label>
