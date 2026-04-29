@@ -43,6 +43,16 @@ const NATIONALITY_OPTIONS = [
   "SINGAPOREAN",
 ] as const;
 
+const ORGANIZATIONAL_UNIT_OPTIONS = [
+  "Planning and Management Division",
+  "Tourism Promotions Division",
+  "Office of the Administrator",
+  "Urban Planning and Community Development Division",
+  "Cultural Properties and Conservation Division",
+  "Business Management Division",
+  "Finance and Administrative Division",
+] as const;
+
 function todayMMDDYYYY(): string {
   const d = new Date();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -253,12 +263,15 @@ export default function PdfFormFiller() {
     setPhoto(dataUrl ? { dataUrl } : null);
   }, []);
   const [status, setStatus] = useState<string>("");
-  const [error, setError] = useState<string>("");
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [resultDialog, setResultDialog] = useState<{
+    kind: "success" | "error";
+    title: string;
+    message: string;
+  } | null>(null);
 
   const loadDefault = useCallback(async () => {
-    setError("");
     try {
       const res = await fetch(DEFAULT_FORM_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -266,11 +279,13 @@ export default function PdfFormFiller() {
       setPdfBytes(buf);
       setStatus("Form template loaded.");
     } catch (e) {
-      setError(
-        `Could not load ${DEFAULT_FORM_URL}: ${
+      setResultDialog({
+        kind: "error",
+        title: "Could not load form template",
+        message: `${DEFAULT_FORM_URL}: ${
           e instanceof Error ? e.message : String(e)
         }`,
-      );
+      });
     }
   }, []);
 
@@ -355,7 +370,6 @@ export default function PdfFormFiller() {
       );
       return false;
     }
-    setError("");
     return true;
   };
 
@@ -373,7 +387,7 @@ export default function PdfFormFiller() {
     if (!pdfBytes || !signature || !photo) return;
     setShowConfirm(false);
     setSubmitting(true);
-    setError("");
+    setResultDialog(null);
     setStatus("Generating filled PDF...");
     try {
       const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
@@ -602,10 +616,13 @@ export default function PdfFormFiller() {
       if (!submitSheet) return;
 
       if (!SHEET_WEBHOOK_URL) {
-        setError(
-          "PDF downloaded, but the registration sheet is not configured " +
-            "(NEXT_PUBLIC_SHEETS_WEBHOOK_URL is missing).",
-        );
+        setResultDialog({
+          kind: "error",
+          title: "Registration sheet not configured",
+          message:
+            "Your PDF was downloaded, but the registration sheet is not " +
+            "configured (NEXT_PUBLIC_SHEETS_WEBHOOK_URL is missing).",
+        });
         return;
       }
 
@@ -632,25 +649,34 @@ export default function PdfFormFiller() {
           mobile: texts.mobileNo.trim(),
           address: toTitleCase(address),
           organization: toTitleCase(texts.organization),
-          organizationUnit: toTitleCase(texts.organizationalUnit),
+          organizationUnit: texts.organizationalUnit,
           gender: checks.sexMale ? "M" : checks.sexFemale ? "F" : "",
           tin: texts.tin.replace(/\D/g, ""),
           pdfBase64,
         });
         setStatus("Filled PDF downloaded and details submitted to the sheet.");
+        setResultDialog({
+          kind: "success",
+          title: "Registration submitted",
+          message:
+            "Your filled PDF has been downloaded and your details were " +
+            "submitted to the registration sheet.",
+        });
       } catch (e) {
         console.error(e);
-        setError(
-          `Submission to sheet failed: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
+        setResultDialog({
+          kind: "error",
+          title: "Submission to sheet failed",
+          message: e instanceof Error ? e.message : String(e),
+        });
       }
     } catch (e) {
       console.error(e);
-      setError(
-        `Failed to generate: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      setResultDialog({
+        kind: "error",
+        title: "Failed to generate PDF",
+        message: e instanceof Error ? e.message : String(e),
+      });
       setStatus("");
     } finally {
       setSubmitting(false);
@@ -672,10 +698,9 @@ export default function PdfFormFiller() {
       }}
       noValidate={false}
     >
-      {(status || error) && (
+      {status && (
         <div className="text-sm">
-          {status && <span className="text-emerald-700">{status}</span>}
-          {error && <span className="text-red-700">{error}</span>}
+          <span className="text-emerald-700">{status}</span>
         </div>
       )}
 
@@ -793,12 +818,27 @@ export default function PdfFormFiller() {
             disabled
             hint="Fixed to Intramuros Administration."
           />
-          <TextInput
-            label="Organizational Unit/Department/Division"
-            value={texts.organizationalUnit}
-            onChange={(v) => setText("organizationalUnit", v)}
-            maxLength={120}
-          />
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">
+              Organizational Unit/Department/Division
+              <span className="ml-0.5 text-red-600">*</span>
+            </label>
+            <select
+              value={texts.organizationalUnit}
+              onChange={(e) => setText("organizationalUnit", e.target.value)}
+              required
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+            >
+              <option value="" disabled>
+                Select organizational unit
+              </option>
+              {ORGANIZATIONAL_UNIT_OPTIONS.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="mt-6">
@@ -1120,6 +1160,15 @@ export default function PdfFormFiller() {
           onConfirm={() => void generate(true)}
         />
       )}
+
+      {resultDialog && (
+        <ResultDialog
+          kind={resultDialog.kind}
+          title={resultDialog.title}
+          message={resultDialog.message}
+          onClose={() => setResultDialog(null)}
+        />
+      )}
     </form>
   );
 }
@@ -1176,6 +1225,68 @@ function ConfirmDialog({
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500"
           >
             Confirm &amp; Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultDialog({
+  kind,
+  title,
+  message,
+  onClose,
+}: {
+  kind: "success" | "error";
+  title: string;
+  message: string;
+  onClose: () => void;
+}) {
+  const isSuccess = kind === "success";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="result-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className={`border-b px-6 py-4 ${
+            isSuccess
+              ? "border-emerald-200 bg-emerald-50"
+              : "border-red-200 bg-red-50"
+          }`}
+        >
+          <h2
+            id="result-title"
+            className={`text-base font-semibold ${
+              isSuccess ? "text-emerald-900" : "text-red-900"
+            }`}
+          >
+            {title}
+          </h2>
+        </div>
+        <div className="px-6 py-5 text-sm leading-relaxed text-slate-700">
+          <p className="whitespace-pre-wrap">{message}</p>
+        </div>
+        <div className="flex justify-end border-t border-slate-200 bg-slate-50 px-6 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            autoFocus
+            className={`rounded-lg px-4 py-2 text-sm font-semibold text-white shadow ${
+              isSuccess
+                ? "bg-emerald-600 hover:bg-emerald-500"
+                : "bg-red-600 hover:bg-red-500"
+            }`}
+          >
+            OK
           </button>
         </div>
       </div>
