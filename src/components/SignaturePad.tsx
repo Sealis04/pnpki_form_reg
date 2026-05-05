@@ -11,7 +11,12 @@ type Props = {
 export default function SignaturePad({ onChange, height = 200 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const padRef = useRef<SignaturePadLib | null>(null);
+  const onChangeRef = useRef(onChange);
   const [empty, setEmpty] = useState(true);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,7 +42,7 @@ export default function SignaturePad({ onChange, height = 200 }: Props) {
       pad.addEventListener("endStroke", () => {
         const isEmpty = pad.isEmpty();
         setEmpty(isEmpty);
-        if (!isEmpty) onChange(pad.toDataURL("image/png"));
+        if (!isEmpty) onChangeRef.current(pad.toDataURL("image/png"));
       });
 
       padRef.current = pad;
@@ -48,12 +53,12 @@ export default function SignaturePad({ onChange, height = 200 }: Props) {
       padRef.current?.off();
       padRef.current = null;
     };
-  }, [onChange]);
+  }, []);
 
   const clear = () => {
     padRef.current?.clear();
     setEmpty(true);
-    onChange("");
+    onChangeRef.current("");
   };
 
   return (
