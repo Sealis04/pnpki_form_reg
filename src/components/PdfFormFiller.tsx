@@ -29,6 +29,16 @@ const DEFAULT_NATIONALITY = "FILIPINO";
 const UNIFORM_FONT_SIZE = 10;
 // 35 mm wide x 45 mm tall passport-size photo.
 const PHOTO_ASPECT = 35 / 45;
+// Fixed export resolution for the passport photo, matching PHOTO_ASPECT
+// (7:9). Exporting at a fixed size — rather than the crop box's native
+// pixel size — keeps the photo print-quality even when a user zooms in
+// tightly to frame their face.
+const PHOTO_OUTPUT_W = 700;
+const PHOTO_OUTPUT_H = 900;
+// Stable object reference (not recreated per render) so it doesn't defeat
+// SignatureAdjuster's emitCrop memoization, which would otherwise re-trigger
+// the image-load effect and silently reset the user's crop on every re-render.
+const PHOTO_OUTPUT_SIZE = { w: PHOTO_OUTPUT_W, h: PHOTO_OUTPUT_H };
 
 const NATIONALITY_OPTIONS = [
   "FILIPINO",
@@ -1613,7 +1623,8 @@ function PhotoInput({
           onChange={onChange}
           autoFit={photoAutoFit}
           aspectRatio={PHOTO_ASPECT}
-          helperText="Drag the green corners to frame your face. The crop is locked to the 35×45 mm passport ratio."
+          outputSize={PHOTO_OUTPUT_SIZE}
+          helperText="Drag inside the frame to reposition your face (location), or drag the green corners to zoom in/out (size). The crop is locked to the 35×45 mm passport ratio and always exported at a fixed high resolution, so zooming in won't shrink the final photo."
         />
       )}
     </div>
