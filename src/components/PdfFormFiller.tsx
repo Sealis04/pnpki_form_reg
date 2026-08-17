@@ -17,11 +17,6 @@ import { bytesToBase64, submitToSheet, toTitleCase } from "~/lib/sheet";
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const DEFAULT_FORM_URL = `${BASE_PATH}/pnpki_form.pdf`;
 const SHEET_WEBHOOK_URL = process.env.NEXT_PUBLIC_SHEETS_WEBHOOK_URL ?? "";
-const SIGNATURE_OVERFLOW = (() => {
-  const raw = process.env.NEXT_PUBLIC_SIGNATURE_OVERFLOW;
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n >= 0 ? n : 0.5;
-})();
 
 const DEFAULT_ORGANIZATION = "INTRAMUROS ADMINISTRATION";
 const DEFAULT_PLACE = "INTRAMUROS, MANILA";
@@ -542,13 +537,13 @@ export default function PdfFormFiller() {
         dataUrl: string;
         page: import("pdf-lib").PDFPage;
         rect: { x: number; y: number; width: number; height: number };
-        overflow: number;
+        stretch: boolean;
       }> = [];
 
       const collectPlacements = (
         fieldName: string,
         dataUrl: string,
-        overflow = 0,
+        stretch = false,
       ) => {
         let fieldObj: PDFField;
         try {
@@ -564,7 +559,7 @@ export default function PdfFormFiller() {
           try {
             const rect = w.getRectangle();
             const page = findPageForWidget(doc, w);
-            overlayJobs.push({ dataUrl, page, rect, overflow });
+            overlayJobs.push({ dataUrl, page, rect, stretch });
           } catch (e) {
             console.warn(`Widget rect lookup failed for ${fieldName}`, e);
           }
@@ -573,7 +568,10 @@ export default function PdfFormFiller() {
 
       if (signature) {
         for (const fieldName of SIGNATURE_FIELDS) {
-          collectPlacements(fieldName, signature, SIGNATURE_OVERFLOW);
+          // Stretch to fill the field box exactly (rather than fit-and-
+          // center), since the signature crop's aspect ratio is freeform and
+          // rarely matches the box, which used to leave visible gaps.
+          collectPlacements(fieldName, signature, true);
         }
       }
       if (photo) {
@@ -595,7 +593,7 @@ export default function PdfFormFiller() {
       }
 
       // 5) Draw overlays on top of flattened pages.
-      for (const { dataUrl, page, rect, overflow } of overlayJobs) {
+      for (const { dataUrl, page, rect, stretch } of overlayJobs) {
         const bytes = dataUrlToBytes(dataUrl);
         const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
         const img = isJpeg
@@ -604,11 +602,19 @@ export default function PdfFormFiller() {
         const padding = 2;
         const boxW = Math.max(rect.width - padding * 2, 1);
         const boxH = Math.max(rect.height - padding * 2, 1);
-        const { width: iw, height: ih } = img.scale(1);
-        const fitScale = Math.min(boxW / iw, boxH / ih);
-        const scale = fitScale * (1 + overflow);
-        const drawW = iw * scale;
-        const drawH = ih * scale;
+        let drawW: number;
+        let drawH: number;
+        if (stretch) {
+          // Fill the field box exactly on both axes; the image may be
+          // non-uniformly scaled if its aspect ratio doesn't match the box.
+          drawW = boxW;
+          drawH = boxH;
+        } else {
+          const { width: iw, height: ih } = img.scale(1);
+          const fitScale = Math.min(boxW / iw, boxH / ih);
+          drawW = iw * fitScale;
+          drawH = ih * fitScale;
+        }
         page.drawImage(img, {
           x: rect.x + (rect.width - drawW) / 2,
           y: rect.y + (rect.height - drawH) / 2,
