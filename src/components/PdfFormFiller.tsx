@@ -39,6 +39,12 @@ const PHOTO_OUTPUT_H = 900;
 // SignatureAdjuster's emitCrop memoization, which would otherwise re-trigger
 // the image-load effect and silently reset the user's crop on every re-render.
 const PHOTO_OUTPUT_SIZE = { w: PHOTO_OUTPUT_W, h: PHOTO_OUTPUT_H };
+// Signature fields on the PNPKI template are ~117-133pt wide (~1.6-1.85in).
+// A 600px floor on the exported signature's longer side keeps it print-sharp
+// (~320-375dpi) even when a user crops tightly or auto-fit picks a small ink
+// bounding box, without forcing a fixed aspect ratio like the photo (a
+// signature's shape varies too much for that to make sense).
+const SIGNATURE_OUTPUT_MIN_LONG_EDGE = 600;
 
 const NATIONALITY_OPTIONS = [
   "FILIPINO",
@@ -1591,7 +1597,14 @@ function SignatureInput({
           previewClassName="h-20 w-auto"
         />
       )}
-      {raw && <SignatureAdjuster source={raw} onChange={onChange} />}
+      {raw && (
+        <SignatureAdjuster
+          source={raw}
+          onChange={onChange}
+          minOutputLongEdge={SIGNATURE_OUTPUT_MIN_LONG_EDGE}
+          helperText="Drag inside the box to reposition the signature (location), or drag the green corners/edges to resize the captured area (size). The exported signature is kept sharp even when zoomed in tightly."
+        />
+      )}
     </div>
   );
 }
