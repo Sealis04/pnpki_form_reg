@@ -26,6 +26,15 @@ type Props = {
    * auto-fit. Edge handles are hidden so dragging always preserves the ratio.
    */
   aspectRatio?: number;
+  /**
+   * When set, the exported image is always rendered at this fixed pixel size
+   * (must match `aspectRatio`), regardless of how many native pixels the crop
+   * box currently spans. This decouples "size visible in the document" (the
+   * crop box, adjusted by dragging corners) from output resolution, so
+   * zooming in tightly never shrinks the exported image below print quality.
+   * Without it, output resolution equals the crop box's native pixel size.
+   */
+  outputSize?: { w: number; h: number };
   /** Override the helper text shown above the canvas. */
   helperText?: string;
 };
@@ -135,6 +144,7 @@ export default function SignatureAdjuster({
   onChange,
   autoFit,
   aspectRatio,
+  outputSize,
   helperText,
 }: Props) {
   const computeAutoCrop = autoFit ?? computeInkAutoCrop;
@@ -157,18 +167,35 @@ export default function SignatureAdjuster({
     (c: Rect) => {
       const img = imgRef.current;
       if (!img) return;
-      const outW = Math.max(1, Math.round(c.w));
-      const outH = Math.max(1, Math.round(c.h));
+      const outW = outputSize ? outputSize.w : Math.max(1, Math.round(c.w));
+      const outH = outputSize ? outputSize.h : Math.max(1, Math.round(c.h));
       const canvas = document.createElement("canvas");
       canvas.width = outW;
       canvas.height = outH;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      // Source rect (c) always comes from the crop box in native image
+      // pixels; the destination is the fixed output size when set, so
+      // shrinking the crop box (zooming in) scales up into that fixed
+      // canvas instead of shrinking the exported pixel count.
       ctx.drawImage(img, c.x, c.y, c.w, c.h, 0, 0, outW, outH);
       onChange(canvas.toDataURL("image/png"));
     },
-    [onChange],
+    [onChange, outputSize],
   );
+
+  // emitCrop/computeAutoCrop are read via refs (not effect deps) below so
+  // that a caller passing new callback/object identities each render (e.g.
+  // an inline `outputSize`) can't retrigger this effect and silently reset
+  // an in-progress crop back to the auto-fit default.
+  const emitCropRef = useRef(emitCrop);
+  useEffect(() => {
+    emitCropRef.current = emitCrop;
+  }, [emitCrop]);
+  const computeAutoCropRef = useRef(computeAutoCrop);
+  useEffect(() => {
+    computeAutoCropRef.current = computeAutoCrop;
+  }, [computeAutoCrop]);
 
   // Load the image whenever the source changes; seed an auto-fit crop.
   useEffect(() => {
@@ -185,9 +212,9 @@ export default function SignatureAdjuster({
       if (!img.naturalWidth || !img.naturalHeight) return;
       imgRef.current = img;
       setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
-      const initial = computeAutoCrop(img);
+      const initial = computeAutoCropRef.current(img);
       setCrop(initial);
-      emitCrop(initial);
+      emitCropRef.current(initial);
     };
     img.onerror = () => {
       if (!cancelled) console.warn("SignatureAdjuster: image failed to load");
@@ -196,7 +223,7 @@ export default function SignatureAdjuster({
     return () => {
       cancelled = true;
     };
-  }, [source, emitCrop]);
+  }, [source]);
 
   const displayScale = useMemo(() => {
     if (!imgSize) return 1;
@@ -491,9 +518,18 @@ export default function SignatureAdjuster({
           Auto-fit
         </button>
         <span className="text-xs text-slate-500">
-          {Math.round(crop.w)} × {Math.round(crop.h)} px
+          {outputSize
+            ? `${Math.round(crop.w)} × ${Math.round(crop.h)} px selected → exported at ${outputSize.w} × ${outputSize.h} px`
+            : `${Math.round(crop.w)} × ${Math.round(crop.h)} px`}
         </span>
       </div>
+      {outputSize && (crop.w < outputSize.w || crop.h < outputSize.h) && (
+        <p className="mt-1 text-xs text-amber-600">
+          Zoomed in past the photo&apos;s native resolution — the exported
+          image may look soft. Zoom out (drag the corners outward) for a
+          sharper result.
+        </p>
+      )}
     </div>
   );
 }
