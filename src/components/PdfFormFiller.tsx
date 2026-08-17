@@ -40,6 +40,10 @@ const PHOTO_OUTPUT_SIZE = { w: PHOTO_OUTPUT_W, h: PHOTO_OUTPUT_H };
 // bounding box, without forcing a fixed aspect ratio like the photo (a
 // signature's shape varies too much for that to make sense).
 const SIGNATURE_OUTPUT_MIN_LONG_EDGE = 600;
+// Average width/height ratio of the two signature field widgets on the
+// template (~116.7x26.9pt and ~133.2x26.8pt), used to size the live "how it
+// looks in the document" preview box so it matches the real placement.
+const SIGNATURE_BOX_ASPECT = (116.671 / 26.9075 + 133.227 / 26.8029) / 2;
 
 const NATIONALITY_OPTIONS = [
   "FILIPINO",
@@ -269,6 +273,7 @@ export default function PdfFormFiller() {
   const [texts, setTexts] = useState<TextValues>(EMPTY_TEXT);
   const [checks, setChecks] = useState<CheckValues>(EMPTY_CHECKS);
   const [signature, setSignature] = useState<string>("");
+  const [signatureZoom, setSignatureZoom] = useState(1);
   const [photo, setPhoto] = useState<PhotoUpload>(null);
   const handlePhotoCropChange = useCallback((dataUrl: string) => {
     setPhoto(dataUrl ? { dataUrl } : null);
@@ -537,13 +542,13 @@ export default function PdfFormFiller() {
         dataUrl: string;
         page: import("pdf-lib").PDFPage;
         rect: { x: number; y: number; width: number; height: number };
-        stretch: boolean;
+        zoom: number;
       }> = [];
 
       const collectPlacements = (
         fieldName: string,
         dataUrl: string,
-        stretch = false,
+        zoom = 1,
       ) => {
         let fieldObj: PDFField;
         try {
@@ -559,7 +564,7 @@ export default function PdfFormFiller() {
           try {
             const rect = w.getRectangle();
             const page = findPageForWidget(doc, w);
-            overlayJobs.push({ dataUrl, page, rect, stretch });
+            overlayJobs.push({ dataUrl, page, rect, zoom });
           } catch (e) {
             console.warn(`Widget rect lookup failed for ${fieldName}`, e);
           }
@@ -568,10 +573,11 @@ export default function PdfFormFiller() {
 
       if (signature) {
         for (const fieldName of SIGNATURE_FIELDS) {
-          // Stretch to fill the field box exactly (rather than fit-and-
-          // center), since the signature crop's aspect ratio is freeform and
-          // rarely matches the box, which used to leave visible gaps.
-          collectPlacements(fieldName, signature, true);
+          // `signatureZoom` (from the live preview) scales the default
+          // fit-inside-the-box placement, so the user can enlarge it (up to
+          // and past the box edges, drawn uncropped) or shrink it, matching
+          // what they saw in SignaturePlacementPreview.
+          collectPlacements(fieldName, signature, signatureZoom);
         }
       }
       if (photo) {
@@ -593,7 +599,7 @@ export default function PdfFormFiller() {
       }
 
       // 5) Draw overlays on top of flattened pages.
-      for (const { dataUrl, page, rect, stretch } of overlayJobs) {
+      for (const { dataUrl, page, rect, zoom } of overlayJobs) {
         const bytes = dataUrlToBytes(dataUrl);
         const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
         const img = isJpeg
@@ -602,19 +608,15 @@ export default function PdfFormFiller() {
         const padding = 2;
         const boxW = Math.max(rect.width - padding * 2, 1);
         const boxH = Math.max(rect.height - padding * 2, 1);
-        let drawW: number;
-        let drawH: number;
-        if (stretch) {
-          // Fill the field box exactly on both axes; the image may be
-          // non-uniformly scaled if its aspect ratio doesn't match the box.
-          drawW = boxW;
-          drawH = boxH;
-        } else {
-          const { width: iw, height: ih } = img.scale(1);
-          const fitScale = Math.min(boxW / iw, boxH / ih);
-          drawW = iw * fitScale;
-          drawH = ih * fitScale;
-        }
+        const { width: iw, height: ih } = img.scale(1);
+        // Scale uniformly (preserving aspect ratio, never distorting) to fit
+        // entirely inside the box at zoom = 1. `zoom` then scales that
+        // further — past 1 the image may extend beyond the box edges, drawn
+        // in full rather than cropped, matching the live preview.
+        const fitScale = Math.min(boxW / iw, boxH / ih);
+        const scale = fitScale * zoom;
+        const drawW = iw * scale;
+        const drawH = ih * scale;
         page.drawImage(img, {
           x: rect.x + (rect.width - drawW) / 2,
           y: rect.y + (rect.height - drawH) / 2,
@@ -1006,6 +1008,13 @@ export default function PdfFormFiller() {
             Signature<span className="ml-0.5 text-red-600">*</span>
           </p>
           <SignatureInput onChange={setSignature} />
+          {signature && (
+            <SignaturePlacementPreview
+              dataUrl={signature}
+              zoom={signatureZoom}
+              onZoomChange={setSignatureZoom}
+            />
+          )}
         </div>
       </Section>
 
@@ -1541,6 +1550,115 @@ function ImageDropZone({
         )}
       </div>
       {err && <p className="mt-1 text-sm text-red-600">{err}</p>}
+    </div>
+  );
+}
+
+const SIGNATURE_PREVIEW_BOX_W = 260;
+const SIGNATURE_ZOOM_MIN = 0.5;
+const SIGNATURE_ZOOM_MAX = 2;
+
+/**
+ * Live preview of how the signature will actually sit in its PDF field box:
+ * same placement math as the real PDF generation (see `generate`). At
+ * zoom = 1 the signature is scaled (uniformly, preserving its shape) to fit
+ * entirely inside the box; the zoom slider scales it further, which can push
+ * it past the box edges — drawn in full rather than cropped. Its value feeds
+ * back into `generate` so the preview always matches the actual output.
+ */
+function SignaturePlacementPreview({
+  dataUrl,
+  zoom,
+  onZoomChange,
+}: {
+  dataUrl: string;
+  zoom: number;
+  onZoomChange: (zoom: number) => void;
+}) {
+  const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!dataUrl) {
+      setImgSize(null);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (!cancelled) {
+        setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+      }
+    };
+    img.src = dataUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [dataUrl]);
+
+  if (!imgSize) return null;
+
+  const boxW = SIGNATURE_PREVIEW_BOX_W;
+  const boxH = boxW / SIGNATURE_BOX_ASPECT;
+  const fitScale = Math.min(boxW / imgSize.w, boxH / imgSize.h);
+  const scale = fitScale * zoom;
+  const drawW = imgSize.w * scale;
+  const drawH = imgSize.h * scale;
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="mb-2 text-xs text-slate-600">
+        Preview of how the signature sits in its box on the PDF, keeping its
+        proportions. It isn&apos;t cropped, so zooming in past 100% may extend
+        it past the dashed edges — adjust the zoom until it looks right.
+      </p>
+      <div
+        className="relative border border-dashed border-slate-400 bg-white"
+        style={{ width: boxW, height: boxH, overflow: "visible" }}
+      >
+        <img
+          src={dataUrl}
+          alt="Signature placement preview"
+          className="absolute"
+          style={{
+            width: drawW,
+            height: drawH,
+            left: (boxW - drawW) / 2,
+            top: (boxH - drawH) / 2,
+          }}
+        />
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <label
+          htmlFor="signature-zoom"
+          className="text-xs font-medium text-slate-700"
+        >
+          Zoom
+        </label>
+        <input
+          id="signature-zoom"
+          type="range"
+          min={SIGNATURE_ZOOM_MIN}
+          max={SIGNATURE_ZOOM_MAX}
+          step={0.05}
+          value={zoom}
+          onChange={(e) => onZoomChange(Number(e.target.value))}
+          className="w-40"
+        />
+        <span className="w-10 text-xs text-slate-500">
+          {Math.round(zoom * 100)}%
+        </span>
+        {zoom !== 1 && (
+          <button
+            type="button"
+            onClick={() => onZoomChange(1)}
+            className="text-xs font-medium text-slate-600 hover:underline"
+          >
+            Reset
+          </button>
+        )}
+      </div>
     </div>
   );
 }
