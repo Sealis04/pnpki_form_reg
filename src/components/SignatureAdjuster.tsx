@@ -35,9 +35,43 @@ type Props = {
    * Without it, output resolution equals the crop box's native pixel size.
    */
   outputSize?: { w: number; h: number };
+  /**
+   * When set (and `outputSize` is not), the exported image's longer side is
+   * upscaled to at least this many pixels if the crop box's native pixels
+   * fall short — preserving the crop's aspect ratio. Use this for freeform
+   * crops (no fixed `aspectRatio`, e.g. signatures) so tightening the crop
+   * box or auto-fitting to a small ink region doesn't leave the exported
+   * image too small to look sharp once placed in the document.
+   */
+  minOutputLongEdge?: number;
   /** Override the helper text shown above the canvas. */
   helperText?: string;
 };
+
+/**
+ * Resolves the actual output canvas size for a crop rect, given the fixed
+ * `outputSize` (locked-aspect case) or `minOutputLongEdge` (freeform case)
+ * export options. Shared by `emitCrop` and the on-screen size readout so
+ * they never disagree about what will actually be exported.
+ */
+function resolveOutputSize(
+  c: Rect,
+  outputSize: { w: number; h: number } | undefined,
+  minOutputLongEdge: number | undefined,
+): { w: number; h: number } {
+  if (outputSize) return outputSize;
+  let w = Math.max(1, Math.round(c.w));
+  let h = Math.max(1, Math.round(c.h));
+  if (minOutputLongEdge) {
+    const longEdge = Math.max(w, h);
+    if (longEdge > 0 && longEdge < minOutputLongEdge) {
+      const scale = minOutputLongEdge / longEdge;
+      w = Math.max(1, Math.round(w * scale));
+      h = Math.max(1, Math.round(h * scale));
+    }
+  }
+  return { w, h };
+}
 
 type HandleKind = "tl" | "tr" | "bl" | "br" | "t" | "b" | "l" | "r" | "move";
 type ResizeHandle = Exclude<HandleKind, "move">;
@@ -145,6 +179,7 @@ export default function SignatureAdjuster({
   autoFit,
   aspectRatio,
   outputSize,
+  minOutputLongEdge,
   helperText,
 }: Props) {
   const computeAutoCrop = autoFit ?? computeInkAutoCrop;
@@ -167,21 +202,24 @@ export default function SignatureAdjuster({
     (c: Rect) => {
       const img = imgRef.current;
       if (!img) return;
-      const outW = outputSize ? outputSize.w : Math.max(1, Math.round(c.w));
-      const outH = outputSize ? outputSize.h : Math.max(1, Math.round(c.h));
+      const { w: outW, h: outH } = resolveOutputSize(
+        c,
+        outputSize,
+        minOutputLongEdge,
+      );
       const canvas = document.createElement("canvas");
       canvas.width = outW;
       canvas.height = outH;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       // Source rect (c) always comes from the crop box in native image
-      // pixels; the destination is the fixed output size when set, so
-      // shrinking the crop box (zooming in) scales up into that fixed
-      // canvas instead of shrinking the exported pixel count.
+      // pixels; the destination is the resolved output size, so shrinking
+      // the crop box (zooming in) scales up into that canvas instead of
+      // shrinking the exported pixel count.
       ctx.drawImage(img, c.x, c.y, c.w, c.h, 0, 0, outW, outH);
       onChange(canvas.toDataURL("image/png"));
     },
-    [onChange, outputSize],
+    [onChange, outputSize, minOutputLongEdge],
   );
 
   // emitCrop/computeAutoCrop are read via refs (not effect deps) below so
@@ -494,6 +532,10 @@ export default function SignatureAdjuster({
 
   if (!source || !imgSize || !crop) return null;
 
+  const exported = resolveOutputSize(crop, outputSize, minOutputLongEdge);
+  const isUpscaled =
+    exported.w > crop.w + 0.5 || exported.h > crop.h + 0.5;
+
   return (
     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <p className="mb-2 text-xs text-slate-600">
@@ -518,16 +560,16 @@ export default function SignatureAdjuster({
           Auto-fit
         </button>
         <span className="text-xs text-slate-500">
-          {outputSize
-            ? `${Math.round(crop.w)} × ${Math.round(crop.h)} px selected → exported at ${outputSize.w} × ${outputSize.h} px`
+          {isUpscaled
+            ? `${Math.round(crop.w)} × ${Math.round(crop.h)} px selected → exported at ${exported.w} × ${exported.h} px`
             : `${Math.round(crop.w)} × ${Math.round(crop.h)} px`}
         </span>
       </div>
-      {outputSize && (crop.w < outputSize.w || crop.h < outputSize.h) && (
+      {isUpscaled && (
         <p className="mt-1 text-xs text-amber-600">
-          Zoomed in past the photo&apos;s native resolution — the exported
-          image may look soft. Zoom out (drag the corners outward) for a
-          sharper result.
+          Zoomed in past the source image&apos;s native resolution — the
+          exported image may look soft. Zoom out (drag the handles outward)
+          for a sharper result.
         </p>
       )}
     </div>
