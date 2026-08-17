@@ -537,13 +537,13 @@ export default function PdfFormFiller() {
         dataUrl: string;
         page: import("pdf-lib").PDFPage;
         rect: { x: number; y: number; width: number; height: number };
-        stretch: boolean;
+        cover: boolean;
       }> = [];
 
       const collectPlacements = (
         fieldName: string,
         dataUrl: string,
-        stretch = false,
+        cover = false,
       ) => {
         let fieldObj: PDFField;
         try {
@@ -559,7 +559,7 @@ export default function PdfFormFiller() {
           try {
             const rect = w.getRectangle();
             const page = findPageForWidget(doc, w);
-            overlayJobs.push({ dataUrl, page, rect, stretch });
+            overlayJobs.push({ dataUrl, page, rect, cover });
           } catch (e) {
             console.warn(`Widget rect lookup failed for ${fieldName}`, e);
           }
@@ -568,9 +568,11 @@ export default function PdfFormFiller() {
 
       if (signature) {
         for (const fieldName of SIGNATURE_FIELDS) {
-          // Stretch to fill the field box exactly (rather than fit-and-
-          // center), since the signature crop's aspect ratio is freeform and
-          // rarely matches the box, which used to leave visible gaps.
+          // Scale (uniformly, preserving aspect ratio) to fully cover the
+          // field box rather than fit-and-center, since the signature
+          // crop's aspect ratio is freeform and rarely matches the box —
+          // fitting inside it used to leave visible gaps. Any excess beyond
+          // the box is drawn uncropped rather than clipped.
           collectPlacements(fieldName, signature, true);
         }
       }
@@ -593,7 +595,7 @@ export default function PdfFormFiller() {
       }
 
       // 5) Draw overlays on top of flattened pages.
-      for (const { dataUrl, page, rect, stretch } of overlayJobs) {
+      for (const { dataUrl, page, rect, cover } of overlayJobs) {
         const bytes = dataUrlToBytes(dataUrl);
         const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
         const img = isJpeg
@@ -602,19 +604,17 @@ export default function PdfFormFiller() {
         const padding = 2;
         const boxW = Math.max(rect.width - padding * 2, 1);
         const boxH = Math.max(rect.height - padding * 2, 1);
-        let drawW: number;
-        let drawH: number;
-        if (stretch) {
-          // Fill the field box exactly on both axes; the image may be
-          // non-uniformly scaled if its aspect ratio doesn't match the box.
-          drawW = boxW;
-          drawH = boxH;
-        } else {
-          const { width: iw, height: ih } = img.scale(1);
-          const fitScale = Math.min(boxW / iw, boxH / ih);
-          drawW = iw * fitScale;
-          drawH = ih * fitScale;
-        }
+        const { width: iw, height: ih } = img.scale(1);
+        // "cover": scale up (uniformly, no distortion) until both box
+        // dimensions are fully covered — the image may extend past the box
+        // edges on one axis, drawn in full rather than cropped to the box.
+        // "contain" (default): scale to fit entirely inside the box, which
+        // may leave empty space on one axis.
+        const scale = cover
+          ? Math.max(boxW / iw, boxH / ih)
+          : Math.min(boxW / iw, boxH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
         page.drawImage(img, {
           x: rect.x + (rect.width - drawW) / 2,
           y: rect.y + (rect.height - drawH) / 2,
